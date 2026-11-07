@@ -39,6 +39,7 @@ class KillTests(unittest.TestCase):
         torque = types.SimpleNamespace(de_energize_can_bus=Mock(return_value=[]))
         maker = types.ModuleType("makermodslab")
         maker.torque = torque
+        maker.metal_gripper = types.SimpleNamespace(install_metal_gripper=Mock())
         station = types.SimpleNamespace(
             arms={side: types.SimpleNamespace(port=side) for side in ("left", "right")},
             makermods=types.SimpleNamespace(can_interface="slcan"),
@@ -47,10 +48,12 @@ class KillTests(unittest.TestCase):
             for side in ("left", "right"):
                 with self.subTest(side=side):
                     module.MetalFollower.reset_mock()
+                    maker.metal_gripper.install_metal_gripper.reset_mock()
                     torque.de_energize_can_bus.reset_mock()
                     self.assertEqual(kill_controlled_arm(station, side), [])
                     module.MetalFollower.assert_called_once()
                     self.assertEqual(module.MetalFollower.call_args.args[0].port, side)
+                    maker.metal_gripper.install_metal_gripper.assert_called_once_with(follower, "")
                     torque.de_energize_can_bus.assert_called_once_with(follower.bus, f"{side} follower arm")
         follower.connect.assert_not_called()
         follower.send_action.assert_not_called()
@@ -66,6 +69,7 @@ class KillTests(unittest.TestCase):
         module.MetalFollower, module.MetalFollowerConfig = Mock(), Mock()
         maker = types.ModuleType("makermodslab")
         maker.torque = types.SimpleNamespace(de_energize_can_bus=Mock(return_value=[]))
+        maker.metal_gripper = types.SimpleNamespace(install_metal_gripper=Mock())
         station = types.SimpleNamespace(arms={"left": Mock(), "right": Mock()}, makermods=Mock())
         with patch.dict(sys.modules, {"lerobot.robots.metal_follower": module, "makermodslab": maker}):
             self.assertEqual(kill_controlled_arm(station, "right", active), [])

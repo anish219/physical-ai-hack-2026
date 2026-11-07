@@ -92,6 +92,20 @@ def base_rotation(rpy_deg: list[float]) -> np.ndarray:
     ])
 
 
+def start_arm(controls, acquire, open_arm):
+    """Report a failed Track startup on the page; retry only on another Track press."""
+    lock = None
+    try:
+        lock = acquire()
+        return open_arm(), lock
+    except Exception as error:
+        if lock is not None:
+            lock.close()
+        controls.change({"tracking": False})
+        controls.report(arm_open=False, message=f"Arm startup failed: {error}")
+        return None, None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/station.yaml")
@@ -185,12 +199,16 @@ def main() -> None:
             with hardware_lock:
                 state = controls.snapshot()
                 if state["tracking"] and robot is None:
-                    lock = station_lock.acquire_sides(f"so101 {args.side}", [args.side])
-                    robot = MakerModsArms(station, energize=not args.dry_run)
-                    joints, grips = robot.read()
-                    command, grip = joints[args.side].copy(), grips[args.side]
-                    action = leader.get_action()
-                    controls.report(arm_open=True, power_off=False, message="")
+                    robot, lock = start_arm(
+                        controls,
+                        lambda: station_lock.acquire_sides(f"so101 {args.side}", [args.side]),
+                        lambda: MakerModsArms(station, energize=not args.dry_run),
+                    )
+                    if robot is not None:
+                        joints, grips = robot.read()
+                        command, grip = joints[args.side].copy(), grips[args.side]
+                        action = leader.get_action()
+                        controls.report(arm_open=True, power_off=False, message="")
                 if robot is not None:
                     if state["tracking"] and tracker.mapping is None:
                         joints, grips = robot.read()

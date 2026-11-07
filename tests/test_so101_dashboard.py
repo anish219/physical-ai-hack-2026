@@ -157,5 +157,36 @@ class ReturnMotionTests(unittest.TestCase):
         np.testing.assert_allclose(command, start, atol=1e-3)
 
 
+class StartupTests(unittest.TestCase):
+    def test_failed_track_keeps_http_page_available_and_allows_explicit_retry(self):
+        from unittest.mock import Mock
+
+        from dream_hackathon.so101 import start_arm
+
+        controls = Controls(1.6, "right")
+        controls.change({"tracking": True})
+        lock = Mock()
+        open_arm = Mock(side_effect=RuntimeError("Release the gripper before starting holding control"))
+        robot, handle = start_arm(controls, lambda: lock, open_arm)
+        self.assertIsNone(robot)
+        self.assertIsNone(handle)
+        lock.close.assert_called_once()
+        open_arm.assert_called_once()
+        dashboard = LeaderDashboard(controls, 0)
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{dashboard.port}/api/state") as response:
+                state = json.load(response)
+            self.assertFalse(state["tracking"])
+            self.assertIn("Release the gripper", state["message"])
+            self.assertEqual(state["scale"], 1.6)
+            controls.change({"tracking": True})
+            expected = Mock()
+            actual, handle = start_arm(controls, lambda: lock, lambda: expected)
+            self.assertIs(actual, expected)
+            self.assertIs(handle, lock)
+        finally:
+            dashboard.close()
+
+
 if __name__ == "__main__":
     unittest.main()

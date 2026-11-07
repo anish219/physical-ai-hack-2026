@@ -38,6 +38,11 @@ own tunnel. Do not start another controller to open another copy of the page.
   disconnect the physical electrical supply. The page reports disable errors.
   Track explicitly reopens and enables only the selected follower afterward.
 
+If Track startup fails, the dashboard remains online and shows the SDK's error.
+The failed startup releases its per-arm ownership; another attempt requires an
+explicit Track press. Kill remains available and uses the gripper-aware driver
+for the selected arm's current motor mode, including before the arm is opened.
+
 Examples default to `<station dataset_dir>/so101/right` (or `left`) on NUCK-1.
 Each example has seven state/action values: six selected-arm joint angles in
 radians and gripper opening in millimetres. The other arm is not commanded or

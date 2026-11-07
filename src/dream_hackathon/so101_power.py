@@ -3,7 +3,7 @@
 
 def kill_controlled_arm(station, side: str, active=None) -> list[str]:
     from lerobot.robots.metal_follower import MetalFollower, MetalFollowerConfig
-    from makermodslab import torque
+    from makermodslab import metal_gripper, torque
 
     problems = []
     if active is not None:
@@ -22,6 +22,7 @@ def kill_controlled_arm(station, side: str, active=None) -> list[str]:
             port=station.arms[side].port, id=f"dream_hackathon_{side}",
             can_interface=station.makermods.can_interface,
         ))
+        metal_gripper.install_metal_gripper(device, "")
         # Open only the selected bus without a handshake; disable, then close.
         problems.extend(torque.de_energize_can_bus(device.bus, f"{side} follower arm"))
     except Exception as error:
