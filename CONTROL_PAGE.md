@@ -64,11 +64,56 @@ The failed startup releases its per-arm ownership; another attempt requires an
 explicit Track press. Kill remains available and uses the gripper-aware driver
 for the selected arm's current motor mode, including before the arm is opened.
 
-Examples default to `<station dataset_dir>/so101/right` (or `left`) on NUCK-1.
-Each example has seven state/action values: six selected-arm joint angles in
-radians and gripper opening in millimetres. The other arm is not commanded or
-included as invented state. Camera keys are the existing Metal scene/left-wrist/
-right-wrist keys. Single-arm training must use a matching single-arm embodiment.
+New examples default to `<station dataset_dir>/so101/right-context` (or
+`left-context`) on NUCK-1. Each frame has the standard 14-value raw MakerMods
+layout: left six joint radians + gripper mm, then right six joints + gripper mm.
+The selected arm records measured state and commanded action. The opposite arm
+records its latest published measured pose in both state and action (hold pose).
+It is never commanded by this page. Its wrist video remains black; overhead and
+the selected wrist remain live. Old seven-value datasets stay in their original
+folders and cannot be appended to with this layout.
+
+Independent controllers publish measurements from `MakerModsArms.read()` to
+`~/.cache/dream_hackathon/arm_context/{left,right}.json`. A stopped publisher's
+last measurement remains static context. Publishers must use this updated
+adapter; an already-running controller must reload it on its next restart.
+There is no second CAN reader, expiry cutoff, or invented zero pose. A missing
+context file reports a recording error. To capture a static pose when that arm's
+adapter is free, run (no enable/disable or target commands):
+
+```sh
+.venv/bin/python -m dream_hackathon.arm_context --side left
+```
+
+Train left and right separately using the normal bimanual model contract. For
+each API call, supply the controlled arm's live state, the other arm's chosen
+static measured context, overhead, the controlled wrist, and a blank other wrist.
+Send only that call's controlled-side output to hardware; discard its other-side
+output. The two calls can run in parallel. Both pose contexts must be expressed
+in the normal per-arm bases with the same gripper units and EEF conversion as
+training. Do not send raw 14-value vectors to a model expecting EEF features.
+
+Prepare new recordings with the existing converter and validation:
+
+```sh
+~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/my-task/so101/right-context --arm metal
+```
+
+The converter produces 34-value state and 32-value action features and runs
+Dream's validator. This validates the format, not learned task performance.
+For historical seven-value recordings, explicitly supply the static opposite
+pose to a new export, then run `add_eef.py` on that export:
+
+```sh
+~/dream-env/bin/python tools/add_arm_context.py ~/hackathon_data/my-task/so101/right \
+  --side right --context-pose ~/.cache/dream_hackathon/arm_context/left.json \
+  --out ~/hackathon_data/my-task/so101/right-static-context
+~/dream-env/bin/python tools/add_eef.py ~/hackathon_data/my-task/so101/right-static-context --arm metal
+```
+
+The export records the supplied pose's provenance. It does not claim that this
+pose was measured during those historical episodes, and does not change their
+original files.
 Stopping a recording or killing motors saves frames already collected; dataset
 validation errors, including an episode that is too short, appear on the page.
 

@@ -7,13 +7,14 @@ import numpy as np
 
 class ExampleRecorder:
     def __init__(self, station, side: str, root: pathlib.Path, task: str,
-                 camera_roles=("overhead", "wrist_l", "wrist_r")) -> None:
+                 camera_roles=("overhead", "wrist_l", "wrist_r"), *, context_pose=None) -> None:
         self.station, self.side, self.root, self.task = station, side, root, task
         self.camera_roles = tuple(camera_roles)
         self.inactive_wrist = "wrist_l" if side == "right" else "wrist_r"
         self.cameras = {}
         self.writer = None
         self.episode = None
+        self.context_pose = context_pose
 
     @property
     def frames(self) -> int:
@@ -50,6 +51,8 @@ class ExampleRecorder:
     def start(self) -> None:
         from dream_hackathon import cameras, dataset, layouts
 
+        if self.context_pose is not None:
+            self.context_pose()  # Report a missing context before opening cameras.
         if not self.cameras:
             self.cameras = cameras.open_cameras(
                 tuple(c for c in self.station.cameras
@@ -57,7 +60,9 @@ class ExampleRecorder:
                 self.station.record_width, self.station.record_height
             )
         if self.writer is None:
-            names = [f"{self.side}_joint_{i}" for i in range(6)] + [f"{self.side}_gripper"]
+            sides = ("left", "right") if self.context_pose is not None else (self.side,)
+            names = [name for side in sides for name in
+                     ([f"{side}_joint_{i}" for i in range(6)] + [f"{side}_gripper"])]
             self.writer = dataset.DatasetWriter(
                 self.root, self.station.fps, self.station.arm, names,
                 [key for role, key in layouts.video_keys(self.station.family).items() if role in self.camera_roles],
@@ -71,6 +76,13 @@ class ExampleRecorder:
         scale = layouts.GRIP_SCALE[self.station.arm]
         measured = np.append(joints, grip * scale).astype(np.float32)
         action = np.append(command, commanded_grip * scale).astype(np.float32)
+        if self.context_pose is not None:
+            context_joints, context_grip = self.context_pose()
+            context = np.append(context_joints, context_grip * scale).astype(np.float32)
+            # The inactive arm's action is hold-at-measured-pose. Its model output
+            # will be ignored by the independently controlled arm's API caller.
+            measured = np.concatenate((context, measured) if self.side == "right" else (measured, context))
+            action = np.concatenate((context, action) if self.side == "right" else (action, context))
         images = {}
         for role, key in layouts.video_keys(self.station.family).items():
             if role not in self.camera_roles:

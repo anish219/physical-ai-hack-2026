@@ -85,6 +85,10 @@ class MakerModsArms:
         degrees = dict(zip(self._devices, self._pool.map(self._read_degrees, self._devices.values()), strict=True))
         joints = {side: np.radians([deg[motor] for motor in MOTORS]) for side, deg in degrees.items()}
         grips = {side: _grip(self._arms[side], deg[GRIPPER]) for side, deg in degrees.items()}
+        from dream_hackathon.arm_context import publish
+
+        for side in joints:
+            publish(side, joints[side], grips[side])
         return joints, grips
 
     def command(self, joints: Joints, grips: Grips) -> None:

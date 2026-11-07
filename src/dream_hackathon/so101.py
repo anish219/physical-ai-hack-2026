@@ -124,7 +124,7 @@ def main() -> None:
     parser.add_argument("--dashboard-port", type=int, default=8081)
     parser.add_argument("--no-dashboard", action="store_true", help="Track immediately without browser controls")
     parser.add_argument("--dataset-dir", type=pathlib.Path,
-                        help="Examples folder (default: station dataset/so101/SIDE)")
+                        help="Examples folder (default: station dataset/so101/SIDE-context)")
     parser.add_argument("--task", help="Task text saved with each example")
     parser.add_argument("--record-cameras", nargs="+", choices=("overhead", "wrist_l", "wrist_r"),
                         default=["overhead", "wrist_l", "wrist_r"], help="Camera roles explicitly recorded")
@@ -161,6 +161,7 @@ def main() -> None:
         from dream_hackathon.so101_gripper import apply_hold_torque, feedback as gripper_feedback
         from dream_hackathon.so101_power import kill_controlled_arm
         from dream_hackathon.so101_recording import ExampleRecorder
+        from dream_hackathon.arm_context import read as read_context_pose
 
         station = config.load(args.config)
         if station.arm != "metal":
@@ -171,9 +172,11 @@ def main() -> None:
         solver = teleop_ik(station)[args.side]
         controls = Controls(args.translation_scale, args.side, args.dry_run, args.gripper_hold_torque_nm)
         tracker = ToolTracker(base_rotation(args.leader_to_base_rpy_deg))
-        root = (args.dataset_dir or whole_station.dataset_dir / "so101" / args.side).expanduser()
+        root = (args.dataset_dir or whole_station.dataset_dir / "so101" / f"{args.side}-context").expanduser()
+        other_side = "left" if args.side == "right" else "right"
         recorder = ExampleRecorder(whole_station, args.side, root,
-                                   args.task or whole_station.task or "do the demonstrated task", args.record_cameras)
+                                   args.task or whole_station.task or "do the demonstrated task", args.record_cameras,
+                                   context_pose=lambda: read_context_pose(other_side))
         controls.report(dataset_dir=str(root), saved_episodes=recorder.saved_count())
 
         def kill_arm():
