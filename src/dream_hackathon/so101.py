@@ -6,6 +6,7 @@ import math
 import pathlib
 import threading
 import time
+from contextlib import ExitStack
 from collections.abc import Mapping
 
 import numpy as np
@@ -123,6 +124,7 @@ def main() -> None:
     parser.add_argument("--leader-tool-link", default="handle_frame_link")
     parser.add_argument("--dashboard-port", type=int, default=8081)
     parser.add_argument("--no-dashboard", action="store_true", help="Track immediately without browser controls")
+    parser.add_argument("--remote-server", help="Use an independently owned arm server instead of opening CAN")
     parser.add_argument("--dataset-dir", type=pathlib.Path,
                         help="Examples folder (default: station dataset/so101/SIDE-context)")
     parser.add_argument("--task", help="Task text saved with each example")
@@ -162,6 +164,7 @@ def main() -> None:
         from dream_hackathon.so101_power import kill_controlled_arm
         from dream_hackathon.so101_recording import ExampleRecorder
         from dream_hackathon.arm_context import read as read_context_pose
+        from dream_hackathon.remote_arm import RemoteArms, remote_cameras
 
         station = config.load(args.config)
         if station.arm != "metal":
@@ -176,7 +179,8 @@ def main() -> None:
         other_side = "left" if args.side == "right" else "right"
         recorder = ExampleRecorder(whole_station, args.side, root,
                                    args.task or whole_station.task or "do the demonstrated task", args.record_cameras,
-                                   context_pose=lambda: read_context_pose(other_side))
+                                   context_pose=lambda: read_context_pose(other_side),
+                                   camera_factory=remote_cameras(args.remote_server) if args.remote_server else None)
         controls.report(dataset_dir=str(root), saved_episodes=recorder.saved_count())
 
         def kill_arm():
@@ -186,6 +190,8 @@ def main() -> None:
                 active, robot = robot, None
                 tracker.mapping = None
                 try:
+                    if args.remote_server:
+                        return RemoteArms.disable(args.remote_server)
                     return kill_controlled_arm(station, args.side, active)
                 finally:
                     if lock is not None:
@@ -213,8 +219,10 @@ def main() -> None:
                 if state["tracking"] and robot is None:
                     robot, lock = start_arm(
                         controls,
-                        lambda: station_lock.acquire_sides(f"so101 {args.side}", [args.side]),
-                        lambda: MakerModsArms(station, energize=not args.dry_run),
+                        lambda: ExitStack() if args.remote_server else station_lock.acquire_sides(
+                            f"so101 {args.side}", [args.side]),
+                        lambda: RemoteArms(args.remote_server, args.side) if args.remote_server else MakerModsArms(
+                            station, energize=not args.dry_run),
                     )
                     if robot is not None:
                         joints, grips = robot.read()

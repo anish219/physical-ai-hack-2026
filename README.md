@@ -14,10 +14,6 @@ This kit drives two follower arms from the Quest's controllers, records each dem
 
 Every station has one overhead camera and one camera on each wrist (USB webcams or Intel RealSense).
 
-## SO-101 leader control on NUCK-1
-
-See [CONTROL_PAGE.md](CONTROL_PAGE.md) to open the shared Track/Untrack, motion scale, recording and motor kill dashboard. It includes teammate connection instructions and the controller source map.
-
 ## For participants
 
 Your station is ready: the arms, cameras, Quest and the Dream library are set up, and its config is `configs/station.yaml`. The station has no screen: you work on it over SSH from your laptop, and watch it in your laptop's browser.
@@ -94,7 +90,7 @@ The rules:
 
    The episodes need no labels: Dream labels every dataset from its overhead camera. `--task "..."` adds a task text of your own, if you want one.
 
-   While `dhk-collect` runs, open http://localhost:8080 **in your laptop's browser**: the dashboard. Its badge says **dry run** or **live**. It first lists every device, with what to do for one that is not ready; once all are, press A on the right controller to open the arms. It shows the three cameras as they are recorded, whether you are recording, and both arms. You can type the task there ("Set task"), play back the episodes you saved, and tick the ones you do not want and delete them ("Delete selected").
+   While `dhk-collect` runs, open http://localhost:8080 **in your laptop's browser**: the dashboard. Its badge says **dry run** or **live**. It first lists the required devices; once ready, press A on the right controller to open the selected arms. Choose **Left arm**, **Right arm** (default), or **Both arms** under **Oculus controls**. Single-arm mode uses the right-hand controller; Both uses each matching controller. Only selected arms are opened and owned, so a separate controller process can own the other arm using the [per-arm API](docs/data_collection.md#separate-controller-processes). Recordings use `left`, `right`, or `both` subfolders under your dataset directory. The dashboard also shows cameras, recording status, task text, saved episodes and deletion controls.
 
    Your episodes are saved on the station in the `--dataset-dir` folder, here `~/hackathon_data/myteam-cubes`, as a LeRobot v2.1 dataset: not in the repo, and not uploaded until you fine-tune. [Where your data is stored](docs/data_collection.md#where-your-data-is-stored) shows what is inside and how to copy it to your laptop.
 

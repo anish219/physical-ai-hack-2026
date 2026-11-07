@@ -7,7 +7,7 @@ import numpy as np
 
 class ExampleRecorder:
     def __init__(self, station, side: str, root: pathlib.Path, task: str,
-                 camera_roles=("overhead", "wrist_l", "wrist_r"), *, context_pose=None) -> None:
+                 camera_roles=("overhead", "wrist_l", "wrist_r"), *, context_pose=None, camera_factory=None) -> None:
         self.station, self.side, self.root, self.task = station, side, root, task
         self.camera_roles = tuple(camera_roles)
         self.inactive_wrist = "wrist_l" if side == "right" else "wrist_r"
@@ -15,6 +15,7 @@ class ExampleRecorder:
         self.writer = None
         self.episode = None
         self.context_pose = context_pose
+        self.camera_factory = camera_factory
 
     @property
     def frames(self) -> int:
@@ -54,7 +55,7 @@ class ExampleRecorder:
         if self.context_pose is not None:
             self.context_pose()  # Report a missing context before opening cameras.
         if not self.cameras:
-            self.cameras = cameras.open_cameras(
+            self.cameras = (self.camera_factory or cameras.open_cameras)(
                 tuple(c for c in self.station.cameras
                       if c.role in self.camera_roles and c.role != self.inactive_wrist),
                 self.station.record_width, self.station.record_height

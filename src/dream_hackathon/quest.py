@@ -4,11 +4,11 @@ Buttons, as the collector uses them:
 
 | Control | Does |
 | --- | --- |
-| Grip (middle finger), held | Engages that arm's clutch: the arm's tool follows the hand |
+| Grip (middle finger), held | Engages the selected arm's clutch (right controller in single-arm mode) |
 | Index trigger | That arm's gripper: released opens, pulled closes |
 | A | Starts recording an episode; pressed again, saves it |
 | B | Discards the episode being recorded |
-| Right joystick click | Sends both arms back to where they started |
+| Right joystick click | Sends selected arms back to where they started |
 
 @see Quest, QuestState
 """

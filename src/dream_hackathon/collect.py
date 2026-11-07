@@ -7,8 +7,9 @@ uv run dhk-collect --config configs/yam.yaml --dry-run     # read only: shows th
 uv run dhk-collect --config configs/yam.yaml --sim         # YAM: i2rt's simulated arms, blank camera frames
 ```
 
-Hold a controller's grip to drive that arm, pull its trigger to close its gripper. A starts an episode and, pressed
-again, saves it; B discards it; the right joystick click sends both arms back to where they started (not while
+Select left, right (default), or both arms on the dashboard. A single arm uses the right controller; both use their
+matching controllers. Hold grip to drive and pull the trigger to close the gripper. A starts an episode and, pressed
+again, saves it; B discards it; the right joystick click sends selected arms back to where they started (not while
 recording). Ctrl+C ends the session: an episode still recording is discarded, and the arms return to where they
 started before the vendor's shutdown releases them.
 
@@ -20,7 +21,7 @@ is shown the same way; a camera reconnects by itself once it is back.
 
 Over SSH: the session serves a browser dashboard on the station's loopback address (dashboard.py says how to open
 it). A lost connection or a `kill` ends the session the same safe way as Ctrl+C, with the rest of its output in
-LOG_PATH; run it inside tmux to keep it going instead. Only one program drives the arms at a time (station_lock.py).
+LOG_PATH; run it inside tmux to keep it going instead. Each process owns only its selected arms (station_lock.py).
 
 The loop runs at the config's `control_hz`; every `control_hz / fps`-th tick is recorded: the measured joints and
 grippers as `observation.state`, the commanded ones as `action`, and each camera's newest frame.
@@ -57,6 +58,7 @@ from dream_hackathon import (
     station_lock,
     teleop,
 )
+from dream_hackathon.arms.session import ArmSession, selected_station
 
 ## Homing and the end-of-session return move every joint at most this fast.
 HOME_SPEED_RAD_S = teleop.HOME_SPEED_RAD_S
@@ -94,7 +96,7 @@ FrameSource = Callable[[], dict[str, npt.NDArray[np.uint8]]]
 
 
 class SessionControls:
-    """What the dashboard can change in a session: the task text new episodes record, and the dataset's episodes.
+    """Dashboard controls: Oculus arm selection, the task text, and the dataset's episodes.
 
     Shared by the control loop and the dashboard's threads. The dataset is guarded by `lock`: the collector holds it
     while an episode records, and a delete takes it without waiting, so a delete is refused while an episode records
@@ -103,6 +105,7 @@ class SessionControls:
 
     Attributes:
     - task: The task text the next episode records.
+    - controlled_arms: Oculus routing: left, right, or both. Applied by the loop at its next tick.
     - writer: The dataset's writer.
     - lock: Held while an episode records, or while episodes are deleted.
     """
@@ -111,8 +114,17 @@ class SessionControls:
         """@param make_writer Opens the dataset's writer; called again after a delete, to reload it."""
         self._make_writer = make_writer
         self.writer = make_writer()
+        self.writer_for: Callable[[str], dataset.DatasetWriter] = lambda _selection: make_writer()
         self.task = task
+        self.controlled_arms = "right"
         self.lock = threading.Lock()
+
+    def set_controlled_arms(self, selection: str) -> tuple[bool, str]:
+        """Routes Oculus input to left, right, or both arms on the next control tick."""
+        if selection not in ("left", "right", "both"):
+            return False, "choose left, right, or both"
+        self.controlled_arms = selection
+        return True, f"Oculus controls: {selection}"
 
     def set_task(self, text: str) -> tuple[bool, str]:
         """Sets the task text the next episode records; an empty text goes back to DEFAULT_TASK."""
@@ -172,6 +184,7 @@ class Collector:
         writer: dataset.DatasetWriter,
         log: Callable[[str], None] = print,
         controls: SessionControls | None = None,
+        on_selection: Callable[[str], dict[str, ik.ArmIK]] | None = None,
     ) -> None:
         """Holds the devices; the command starts where the arms are.
 
@@ -187,6 +200,7 @@ class Collector:
         """
         self._station = station
         self._controls = controls or SessionControls(lambda: writer, task)
+        self._on_selection = on_selection
         self._robot = robot
         self._headset = headset
         self._frames = frames
@@ -198,6 +212,8 @@ class Collector:
         self._ticks = 0
         joints, grips = robot.read()
         self._command = _Command({s: q.copy() for s, q in joints.items()}, dict(grips))
+        self._selection = self._controls.controlled_arms
+        self._home_sides: tuple[str, ...] = ()
         self._clutches = {
             side: teleop.Clutch(
                 quest_to_base=arm.quest_to_base,
@@ -213,8 +229,35 @@ class Collector:
 
     def tick(self) -> None:
         """One control tick: read, react to the buttons, move the command, send it, record every n-th tick."""
+        selection = self._controls.controlled_arms
+        if selection != self._selection:
+            if self.episode is not None:
+                self._toggle_recording()
+            if self._on_selection is not None:
+                try:
+                    with self._controls.lock:
+                        self._iks = self._on_selection(selection)
+                except (
+                    station_lock.StationBusyError,
+                    arms.ArmsError,
+                    config.ConfigError,
+                    dataset.DatasetError,
+                ) as error:
+                    self._log(f"arm selection {selection} was not applied: {error}")
+                    self._controls.controlled_arms = self._selection
+                    selection = self._selection
+            self._selection = selection
+            self.homing = False
+            measured, measured_grips = self._robot.read()
+            self._command = _Command({s: q.copy() for s, q in measured.items()}, dict(measured_grips))
+            for clutch in self._clutches.values():
+                clutch.engaged = False
         measured, measured_grips = self._robot.read()
         state = self._headset.read()
+        # The unselected arm may be controlled separately. Record its actual state rather than an old target.
+        for side in measured.keys() - self.controlled_sides:
+            self._command.joints[side] = measured[side].copy()
+            self._command.grips[side] = measured_grips[side]
         self._handle_buttons(state.pressed)
         if self.homing:
             self._step_home()
@@ -222,7 +265,7 @@ class Collector:
             self._follow(state, measured)
         if self._robot.energized:
             self._resync_lagging(measured)
-            self._robot.command(self._command.joints, self._command.grips)
+            self._send_command(self.controlled_sides)
         if self.episode is not None and self._ticks % self._record_every == 0:
             try:
                 images = self._frames()
@@ -238,6 +281,14 @@ class Collector:
                 )
         self._ticks += 1
 
+    @property
+    def controlled_sides(self) -> set[str]:
+        """The arms receiving Oculus commands this tick."""
+        return {"left", "right"} if self._selection == "both" else {self._selection}
+
+    def _send_command(self, sides: set[str]) -> None:
+        self._robot.command({s: self._command.joints[s] for s in sides}, {s: self._command.grips[s] for s in sides})
+
     def snapshot(self) -> dict[str, Any]:
         """The session's state, for the dashboard and the status line; call it from the loop's thread (it runs FK).
 
@@ -247,9 +298,10 @@ class Collector:
         now = time.monotonic()
         self._warnings = [(when, text) for when, text in self._warnings if now - when < WARNING_SHOWN_S]
         per_arm = {}
-        for side in ("left", "right"):
+        for side in self._command.joints:
             xyz = self._iks[side].fk(self._command.joints[side])[:3, 3]
             per_arm[side] = {
+                "controlled": side in self.controlled_sides,
                 "engaged": self._clutches[side].engaged,
                 "tool_m": [round(float(value), 4) for value in xyz],
                 "grip": round(float(self._command.grips[side]), 3),
@@ -264,6 +316,7 @@ class Collector:
             "task": self._controls.task,
             "dataset": str(self._controls.writer.root),
             "homing": self.homing,
+            "controlled_arms": self._selection,
             "arms": per_arm,
             "warnings": [text for _, text in self._warnings],
             "control_hz": self._station.control_hz,
@@ -272,6 +325,7 @@ class Collector:
     def go_home(self, timeout_s: float = HOME_TIMEOUT_S) -> None:
         """Brings the arms back to where they started at HOME_SPEED_RAD_S, ticking until they arrive or time is up."""
         self.homing = True
+        self._home_sides = tuple(self._robot.start_joints)
         deadline_s = time.monotonic() + timeout_s
         while self.homing:
             if time.monotonic() > deadline_s:
@@ -283,7 +337,7 @@ class Collector:
             if self._robot.energized:
                 measured, _ = self._robot.read()
                 self._resync_lagging(measured)
-                self._robot.command(self._command.joints, self._command.grips)
+                self._send_command(set(self._home_sides))
             time.sleep(max(0.0, self._dt_s - (time.perf_counter() - started_s)))
 
     def discard(self) -> None:
@@ -306,6 +360,7 @@ class Collector:
                 self._log("homing is off while recording: save (A) or discard (B) first")
             else:
                 self.homing = True
+                self._home_sides = tuple(self.controlled_sides)
                 for clutch in self._clutches.values():
                     clutch.engaged = False
 
@@ -343,19 +398,25 @@ class Collector:
         hand and the status line's tool position follows it, which checks the IK model against the real arm.
         """
         for side, clutch in self._clutches.items():
+            if side not in self.controlled_sides:
+                clutch.engaged = False
+                continue
+            controller = side if self._selection == "both" else "right"
             solver = self._iks[side]
             joints = self._command.joints[side]
-            target = clutch.update(state.grip[side], state.poses[side], solver.fk(joints))
+            target = clutch.update(state.grip[controller], state.poses[controller], solver.fk(joints))
             if target is None:
                 if not self._robot.energized:
                     self._command.joints[side] = measured[side].copy()
                 continue
             self._command.joints[side] = solver.step(target, joints, self._dt_s)
-            self._command.grips[side] = 1.0 - state.trigger[side]
+            self._command.grips[side] = 1.0 - state.trigger[controller]
 
     def _step_home(self) -> None:
         done = True
         for side, start in self._robot.start_joints.items():
+            if side not in self._home_sides:
+                continue
             joints, arrived = teleop.home_step(self._command.joints[side], start, self._dt_s)
             self._command.joints[side] = joints
             done = done and arrived
@@ -370,6 +431,8 @@ class Collector:
     def _resync_lagging(self, measured: arms.Joints) -> None:
         """Re-syncs an arm that cannot follow (blocked, or stalled) to where it is, and releases its clutch."""
         for side, joints in measured.items():
+            if side not in (set(self._home_sides) if self.homing else self.controlled_sides):
+                continue
             error = float(np.max(np.abs(self._command.joints[side] - joints)))
             if error > MAX_TRACKING_ERROR_RAD:
                 self._warn(f"{side} arm is {np.degrees(error):.0f} deg behind its target: holding where it is")
@@ -385,32 +448,32 @@ def run(
     sim: bool,
     quest_ip: str | None,
     dashboard_port: int = dashboard.DEFAULT_PORT,
+    controlled_arms: str = "right",
 ) -> None:
     """Opens the devices, runs the loop until Ctrl+C (or a lost SSH connection), then shuts everything down safely.
 
     @throws StationBusyError Another program (a collector, a check, `dreamcli`) holds the station's arms.
     """
-    iks = arms.open_ik(station)  # first: a missing tool center point stops here, before any device opens
+    iks = arms.open_ik(selected_station(station, controlled_arms))
 
-    def make_writer() -> dataset.DatasetWriter:
+    def writer_for(selection: str) -> dataset.DatasetWriter:
+        selected = selected_station(station, selection)
         return dataset.DatasetWriter(
-            station.dataset_dir,
+            station.dataset_dir / selection,
             station.fps,
             station.arm,
-            _state_names(station),
+            _state_names(selected),
             list(layouts.video_keys(station.family).values()),
             station.record_width,
             station.record_height,
         )
 
-    controls = SessionControls(make_writer, task)
-    # A simulated YAM drives no hardware, so it takes no lock.
-    lock = None if sim else station_lock.acquire("dhk-collect", station.dataset_dir.resolve())
-    try:
-        _run_locked(station, controls, iks, dry_run=dry_run, sim=sim, quest_ip=quest_ip, port=dashboard_port)
-    finally:
-        if lock is not None:
-            lock.close()
+    controls = SessionControls(lambda: writer_for(controlled_arms), task)
+    controls.writer_for = writer_for
+    ok, message = controls.set_controlled_arms(controlled_arms)
+    if not ok:
+        raise ValueError(message)
+    _run_locked(station, controls, iks, dry_run=dry_run, sim=sim, quest_ip=quest_ip, port=dashboard_port)
 
 
 def _run_locked(
@@ -423,7 +486,7 @@ def _run_locked(
     quest_ip: str | None,
     port: int,
 ) -> None:
-    """run() with the station's lock held."""
+    """Runs the devices and dashboard; ArmSession acquires ownership when selected arms open."""
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGHUP, _hang_up)
     if os.environ.get("SSH_CONNECTION") and not (os.environ.get("TMUX") or os.environ.get("STY")):
@@ -431,7 +494,8 @@ def _run_locked(
             "note: this session runs over SSH outside tmux. If the connection drops it ends, safely (the arms return "
             "and are released); start it inside `tmux new -A -s collect` to keep it running instead."
         )
-    found = devices.DeviceSet(station, sim=sim, quest_ip=quest_ip)
+    found = devices.DeviceSet(selected_station(station, controls.controlled_arms), sim=sim, quest_ip=quest_ip)
+    session = ArmSession(station, energize=not dry_run, sim=sim)
     blank = np.zeros((station.record_height, station.record_width, 3), dtype=np.uint8)
 
     def frame(role: str) -> npt.NDArray[np.uint8]:
@@ -465,15 +529,58 @@ def _run_locked(
         log(f"dashboard: {message}")
         return ok, message
 
+    def select_arms(selection: str) -> tuple[bool, str]:
+        ok, message = controls.set_controlled_arms(selection)
+        log(f"dashboard: {message}")
+        return ok, message
+
     board = _open_dashboard(
-        station, frame, port, on_fix=fix, on_task=set_task, on_delete=delete, task_of=lambda: controls.task
+        station,
+        frame,
+        port,
+        on_fix=fix,
+        on_task=set_task,
+        on_delete=delete,
+        task_of=lambda: controls.task,
+        on_control=select_arms,
+        control_of=lambda: controls.controlled_arms,
     )
+    if board is not None:
+        board.dataset_root(controls.writer.root)
+
+    def apply_selection(selection: str) -> dict[str, ik.ArmIK]:
+        selected = selected_station(station, selection)
+        solvers = arms.open_ik(selected)
+        writer = controls.writer_for(selection)
+        session.select(selection)
+        found.select_arms(selected.arms)
+        controls.writer = writer
+        controls._make_writer = lambda: controls.writer_for(selection)
+        if board is not None:
+            board.dataset_root(writer.root)
+        log(f"Oculus owns: {', '.join(selected.arms)}; dataset: {writer.root}")
+        return solvers
+
+    def open_selected(*_args: Any, **_kwargs: Any) -> arms.Arms:
+        nonlocal iks
+        iks = apply_selection(controls.controlled_arms)
+        return session
 
     monitor = None
     try:
         reported: dict[str, str | None] = {}
         try:
-            robot = wait_and_open_arms(station, found, board, log, dry_run=dry_run, sim=sim, reported=reported)
+            robot = wait_and_open_arms(
+                station,
+                found,
+                board,
+                log,
+                dry_run=dry_run,
+                sim=sim,
+                reported=reported,
+                open_arms=open_selected,
+                selection_of=lambda: controls.controlled_arms,
+            )
         except KeyboardInterrupt:
             log("session ended before the arms were opened")
             return
@@ -481,7 +588,16 @@ def _run_locked(
         collector = None
         try:
             collector = Collector(
-                station, controls.task, robot, found.headset, frames, iks, controls.writer, log=log, controls=controls
+                station,
+                controls.task,
+                robot,
+                found.headset,
+                frames,
+                iks,
+                controls.writer,
+                log=log,
+                controls=controls,
+                on_selection=apply_selection,
             )
             _loop(collector, 1.0 / station.control_hz, board)
         finally:
@@ -501,6 +617,7 @@ def _run_locked(
     finally:
         if monitor is not None:
             monitor.stop()
+        session.close()
         found.close()
         if board is not None:
             board.close()
@@ -518,6 +635,7 @@ def wait_and_open_arms(
     open_arms: Callable[..., arms.Arms] | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    selection_of: Callable[[], str] | None = None,
 ) -> arms.Arms:
     """Opens the devices as they become ready, then the arms once everything is ready and A is pressed.
 
@@ -538,6 +656,12 @@ def wait_and_open_arms(
     ready_since_s = 0.0
     next_check_s = clock()
     while True:
+        if selection_of is not None:
+            selected = selected_station(station, selection_of())
+            if selected.arms.keys() != found.arm_sides:
+                found.select_arms(selected.arms)
+                reported.clear()
+                ready, phase, next_check_s = False, "", clock()
         if clock() >= next_check_s:
             found.try_open()
             statuses = found.statuses()
@@ -648,6 +772,8 @@ def _open_dashboard(
     on_task: Callable[[str], tuple[bool, str]] | None = None,
     on_delete: Callable[[list[int]], tuple[bool, str]] | None = None,
     task_of: Callable[[], str] | None = None,
+    on_control: Callable[[str], tuple[bool, str]] | None = None,
+    control_of: Callable[[], str] | None = None,
 ) -> dashboard.Dashboard | None:
     """Starts the dashboard and says how to open it; a taken port leaves the session without one."""
     if not port:
@@ -663,6 +789,8 @@ def _open_dashboard(
             on_task=on_task,
             on_delete=on_delete,
             task_of=task_of,
+            on_control=on_control,
+            control_of=control_of,
         )
     except OSError as error:
         _say(
@@ -707,8 +835,7 @@ def _status_line(snapshot: dict[str, Any]) -> str:
     parts = [f"REC {snapshot['frames']} frames" if snapshot["recording"] else "idle"]
     if snapshot["homing"]:
         parts.append("homing")
-    for side in ("left", "right"):
-        arm = snapshot["arms"][side]
+    for side, arm in snapshot["arms"].items():
         x, y, z = arm["tool_m"]
         parts.append(f"{side} {'ON ' if arm['engaged'] else 'off'} tool [{x:+.3f} {y:+.3f} {z:+.3f}] m")
     return " | ".join(parts)
@@ -748,6 +875,8 @@ def _state_names(station: config.StationConfig) -> list[str]:
     """One name per value of the recorded vectors, e.g. `right_joint_0` ... `right_gripper`."""
     names = []
     for side in layouts.SIDE_ORDER[station.family]:
+        if side not in station.arms:
+            continue
         names += [f"{side}_joint_{i}" for i in range(layouts.JOINTS)] + [f"{side}_gripper"]
     return names
 
@@ -774,6 +903,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--sim", action="store_true", help="YAM: i2rt's simulated arms and blank camera frames")
     parser.add_argument("--quest-ip", help="the Quest's address for adb over Wi-Fi (default: USB)")
     parser.add_argument(
+        "--controlled-arms",
+        choices=("left", "right", "both"),
+        default="right",
+        help="initial Oculus arm selection; change it from the dashboard (default: right)",
+    )
+    parser.add_argument(
         "--dashboard-port",
         type=int,
         default=dashboard.DEFAULT_PORT,
@@ -794,6 +929,7 @@ def main(argv: list[str] | None = None) -> None:
             sim=args.sim,
             quest_ip=args.quest_ip,
             dashboard_port=args.dashboard_port,
+            controlled_arms=args.controlled_arms,
         )
     except (station_lock.StationBusyError, quest.QuestError, arms.ArmsError) as error:
         sys.exit(str(error))

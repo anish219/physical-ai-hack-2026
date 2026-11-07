@@ -1,0 +1,84 @@
+# Reference functions from the existing NUC pah/armserver.py.
+# Original SHA256: 4a32d11f00cdf7a51da655abc9ca9ea2eddd7b3d2ff574a2af8c1a992b84ca3a
+def control(arm):
+    cmd = np.array(arm.read().positions_rad, dtype=float)
+    st['q'] = cmd.tolist()
+    st['goal'] = cmd.tolist()
+    grip_cmd = st['goal_grip']
+    lags, start = ([], cmd.copy())
+    while True:
+        with lock:
+            goal, goal_grip, rate = (np.array(st['goal']), st['goal_grip'], min(st['rate'], MAX_RATE))
+        if st['quit']:
+            goal, rate = (start, 0.3)
+        d = goal - cmd
+        step = rate * TICK
+        n = np.max(np.abs(d))
+        cmd = goal.copy() if n <= step else cmd + d * (step / n)
+        grip_cmd += float(np.clip(goal_grip - grip_cmd, -1.5 * TICK, 1.5 * TICK))
+        arm.write(types.ArmCommand(positions_rad=cmd, gripper=grip_cmd))
+        time.sleep(TICK)
+        r = arm.read()
+        meas = np.array(r.positions_rad, dtype=float)
+        lag = float(np.max(np.abs(cmd - meas)))
+        st.update(q=meas.tolist(), grip=float(getattr(r, 'gripper', grip_cmd)), lag=lag, stamp=time.time(), moving=bool(np.max(np.abs(goal - cmd)) > 0.0001 or abs(goal_grip - grip_cmd) > 0.001))
+        if st['quit'] and (not st['moving']):
+            return
+        if lag > ABORT_RAD:
+            with lock:
+                st['goal'] = meas.tolist()
+                st['error'] = f'joint lag {lag:.2f} rad: stopped where the arm is'
+            cmd = meas.copy()
+            continue
+        if st['stall_watch'] and st['moving']:
+            lags.append(float(np.max(np.abs(cmd[1:4] - meas[1:4]))))
+            if len(lags) > 10 and lags[-1] > max(lags[:10]) + STALL_RAD:
+                with lock:
+                    st['goal'] = meas.tolist()
+                    st['stalled'] = True
+                    st['stall_watch'] = False
+                cmd = meas.copy()
+        else:
+            lags = []
+
+class Handler(BaseHTTPRequestHandler):
+
+    def log_message(self, *a):
+        pass
+
+    def reply(self, code, body, ctype='application/json', headers=()):
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        for k, v in headers:
+            self.send_header(k, v)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        name = self.path.strip('/').split('.')[0]
+        if name in ('wrist', 'overhead'):
+            f = frames.get(name)
+            if f is None:
+                return self.reply(503, b'{"error": "no frame"}')
+            jpg, q, grip, t = f
+            return self.reply(200, jpg, 'image/jpeg', [('X-Joints', json.dumps(q)), ('X-Grip', json.dumps(grip)), ('X-Stamp', f'{t:.3f}')])
+        self.reply(200, json.dumps({k: st[k] for k in ('q', 'grip', 'goal', 'goal_grip', 'rate', 'moving', 'stalled', 'lag', 'stamp', 'cams', 'error')}).encode())
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
+        with lock:
+            if self.path == '/move':
+                if body.get('q') is not None:
+                    st['goal'] = [float(v) for v in body['q']]
+                if body.get('grip') is not None:
+                    st['goal_grip'] = float(np.clip(body['grip'], 0, 1))
+                st['rate'] = float(body.get('rate', 0.3))
+                st['stalled'] = False
+                st['error'] = None
+                st['stall_watch'] = bool(body.get('stop_on_stall', False))
+            elif self.path == '/stop':
+                st['goal'] = list(st['q'])
+            elif self.path == '/quit':
+                st['quit'] = True
+        self.reply(200, json.dumps({'ok': True}).encode())

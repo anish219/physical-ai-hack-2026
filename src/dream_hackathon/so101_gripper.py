@@ -2,10 +2,15 @@
 
 
 def apply_hold_torque(robot, side: str, torque_nm: float) -> None:
+    if hasattr(robot, "set_hold_torque"):
+        robot.set_hold_torque(torque_nm)
+        return
     robot._devices[side].bus.apply_hold_torque(torque_nm)
 
 
 def feedback(robot, side: str) -> dict:
+    if hasattr(robot, "gripper_feedback"):
+        return robot.gripper_feedback()
     bus = robot._devices[side].bus
     with bus._lock:
         measured = bus._base._last_known_states.get("gripper", {}).get("torque")

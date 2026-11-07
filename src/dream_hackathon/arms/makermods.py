@@ -95,7 +95,8 @@ class MakerModsArms:
         if not self.energized:
             raise RuntimeError("a dry run never commands the arms")
         sends = []
-        for side, device in self._devices.items():
+        for side in joints:
+            device = self._devices[side]
             action = {f"{motor}.pos": math.degrees(value) for motor, value in zip(MOTORS, joints[side], strict=True)}
             action[f"{GRIPPER}.pos"] = _gripper_deg(self._arms[side], grips[side])
             sends.append(self._pool.submit(device.send_action, action))

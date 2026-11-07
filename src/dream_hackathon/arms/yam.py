@@ -37,16 +37,14 @@ class YamArms:
 
         assert station.yam is not None
         if not sim:
-            problems = [
-                problem for side in ("left", "right") if (problem := can_link_problem(station.arms[side].port))
-            ]
+            problems = [problem for side in station.arms if (problem := can_link_problem(station.arms[side].port))]
             if problems:
                 raise ArmsError("the arms cannot be opened yet:\n  " + "\n  ".join(problems))
         gripper = GripperType.from_string_name(station.yam.gripper)
         self.energized = energize
         self._robots = {}
         try:
-            for side in ("left", "right"):
+            for side in station.arms:
                 self._robots[side] = get_yam_robot(
                     channel=station.arms[side].port, gripper_type=gripper, zero_gravity_mode=not energize, sim=sim
                 )
@@ -67,7 +65,8 @@ class YamArms:
     def command(self, joints: Joints, grips: Grips) -> None:
         if not self.energized:
             raise RuntimeError("a dry run never commands the arms")
-        for side, robot in self._robots.items():
+        for side in joints:
+            robot = self._robots[side]
             robot.command_joint_pos(np.append(joints[side], np.clip(grips[side], 0.0, 1.0)))
 
     def close(self) -> None:
