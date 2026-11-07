@@ -78,13 +78,42 @@ class KillTests(unittest.TestCase):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_only_overhead_and_controlled_wrist_are_opened_other_view_is_blank(self):
+        from dream_hackathon import cameras, dataset, layouts
+
+        for side, inactive in (("right", "wrist_l"), ("left", "wrist_r")):
+            with self.subTest(side=side), tempfile.TemporaryDirectory() as folder:
+                roles = ("overhead", "wrist_l", "wrist_r")
+                station = types.SimpleNamespace(
+                    arm="metal", family="makermods", fps=30, record_width=160, record_height=90,
+                    cameras=tuple(types.SimpleNamespace(role=role) for role in roles),
+                )
+                live = {role: Mock() for role in roles if role != inactive}
+                for camera in live.values():
+                    camera.latest.return_value = np.full((90, 160, 3), 123, dtype=np.uint8)
+                writer = Mock()
+                with patch.object(cameras, "open_cameras", return_value=live) as opened:
+                    with patch.object(dataset, "DatasetWriter", return_value=writer):
+                        recorder = ExampleRecorder(station, side, pathlib.Path(folder), "task")
+                        recorder.start()
+                    selected_configs = opened.call_args.args[0]
+                    self.assertEqual({cfg.role for cfg in selected_configs}, set(roles) - {inactive})
+                    recorder.add(np.zeros(6), 0, np.zeros(6), 0)
+                images = writer.start_episode.return_value.add_frame.call_args.args[2]
+                keys = layouts.video_keys("makermods")
+                self.assertEqual(set(images), set(keys.values()))
+                self.assertFalse(images[keys[inactive]].any())
+                for role in set(roles) - {inactive}:
+                    self.assertTrue((images[keys[role]] == 123).all())
+                recorder.close()
+
     def test_explicit_overhead_only_dataset_has_one_video_feature(self):
         try:
             from dream_hackathon import dataset
             import json
         except ImportError:
             self.skipTest("needs video and dataset dependencies")
-        station = types.SimpleNamespace(arm="metal", family="makermods")
+        station = types.SimpleNamespace(arm="metal", family="makermods", record_width=160, record_height=90)
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             recorder = ExampleRecorder(station, "right", root, "move the cube", ("overhead",))
@@ -108,26 +137,36 @@ class RecordingTests(unittest.TestCase):
         try:
             from dream_hackathon import dataset, layouts
             import pyarrow.parquet as pq
+            import av
         except ImportError:
             self.skipTest("needs video and dataset dependencies")
-        station = types.SimpleNamespace(arm="metal", family="makermods")
+        station = types.SimpleNamespace(arm="metal", family="makermods", record_width=160, record_height=90)
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             recorder = ExampleRecorder(station, "right", root, "move the cube")
             keys = layouts.video_keys("makermods")
             recorder.cameras = {role: Mock() for role in keys}
             for camera in recorder.cameras.values():
-                camera.latest.return_value = np.zeros((90, 160, 3), dtype=np.uint8)
+                camera.latest.return_value = np.full((90, 160, 3), 123, dtype=np.uint8)
             names = [f"right_joint_{i}" for i in range(6)] + ["right_gripper"]
             recorder.writer = dataset.DatasetWriter(root, 30, "metal", names, list(keys.values()), 160, 90)
             recorder.start()
             for _ in range(dataset.min_frames(30)):
                 recorder.add(np.zeros(6), 0.25, np.ones(6), 0.75)
+            recorder.cameras["wrist_l"].latest.assert_not_called()
             self.assertEqual(recorder.stop(), 0)
             table = pq.read_table(root / "data/chunk-000/episode_000000.parquet")
             np.testing.assert_allclose(table["observation.state"][0].as_py(), [0, 0, 0, 0, 0, 0, 25])
             np.testing.assert_allclose(table["action"][0].as_py(), [1, 1, 1, 1, 1, 1, 75])
             self.assertEqual(len(list((root / "videos").rglob("*.mp4"))), 3)
+            for role, key in keys.items():
+                path = root / "videos/chunk-000" / key / "episode_000000.mp4"
+                with av.open(str(path)) as video:
+                    frame = next(video.decode(video=0)).to_ndarray(format="bgr24")
+                if role == "wrist_l":
+                    self.assertLessEqual(int(frame.max()), 1)
+                else:
+                    self.assertGreater(float(frame.mean()), 100)
             recorder.close()
 
 

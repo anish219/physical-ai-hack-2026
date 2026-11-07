@@ -10,6 +10,7 @@ class ExampleRecorder:
                  camera_roles=("overhead", "wrist_l", "wrist_r")) -> None:
         self.station, self.side, self.root, self.task = station, side, root, task
         self.camera_roles = tuple(camera_roles)
+        self.inactive_wrist = "wrist_l" if side == "right" else "wrist_r"
         self.cameras = {}
         self.writer = None
         self.episode = None
@@ -23,7 +24,8 @@ class ExampleRecorder:
 
         if not self.cameras:
             self.cameras = cameras.open_cameras(
-                tuple(c for c in self.station.cameras if c.role in self.camera_roles),
+                tuple(c for c in self.station.cameras
+                      if c.role in self.camera_roles and c.role != self.inactive_wrist),
                 self.station.record_width, self.station.record_height
             )
         if self.writer is None:
@@ -41,8 +43,14 @@ class ExampleRecorder:
         scale = layouts.GRIP_SCALE[self.station.arm]
         measured = np.append(joints, grip * scale).astype(np.float32)
         action = np.append(command, commanded_grip * scale).astype(np.float32)
-        images = {key: self.cameras[role].latest() for role, key in layouts.video_keys(self.station.family).items()
-                  if role in self.camera_roles}
+        images = {}
+        for role, key in layouts.video_keys(self.station.family).items():
+            if role not in self.camera_roles:
+                continue
+            if role == self.inactive_wrist:
+                images[key] = np.zeros((self.station.record_height, self.station.record_width, 3), dtype=np.uint8)
+            else:
+                images[key] = self.cameras[role].latest()
         self.episode.add_frame(measured, action, images)
 
     def stop(self) -> int | None:

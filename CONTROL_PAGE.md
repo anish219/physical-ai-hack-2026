@@ -27,13 +27,16 @@ own tunnel. Do not start another controller to open another copy of the page.
   Track captures fresh leader/tool anchors. As with the existing control, save
   an active recording before returning. Kill arm interrupts a return directly.
 - **Record example / Stop & save example:** After the arm has been opened with
-  Track, records its measured joints/gripper, commanded joints/gripper, and all
-  three station cameras. Stop & save commits a LeRobot v2.1 episode on NUCK-1.
+  Track, records its measured joints/gripper and commanded joints/gripper,
+  the live overhead and controlled-arm wrist cameras, and blank frames for the
+  uncontrolled arm's wrist. The uncontrolled wrist camera is not opened.
+  Stop & save commits a LeRobot v2.1 episode on NUCK-1.
   The page reports the folder and saved episode number. The writer requires at
   least 1.6 seconds (49 frames at 30 fps). Recording works while untracked too.
   `--record-cameras overhead` explicitly selects a one-camera recording;
-  the default is `overhead wrist_l wrist_r`. Only selected video features are
-  written, with no substituted images for missing cameras. Recording errors
+  the default is `overhead wrist_l wrist_r`, including the inactive wrist's
+  blank stream. The overhead and controlled wrist streams require real cameras;
+  neither is substituted when missing. Recording errors
   stay visible even after a Home or tracking action changes the general status.
 - **Kill arm:** Stops this controller's tracking and recording request and sends
   motor torque-disable commands to **only the selected arm and its gripper**.

@@ -67,14 +67,17 @@ The page also offers **Record example / Stop & save example** and **Kill arm**.
 **Return to 0** shares the existing Home command's motion: the selected arm
 returns to its captured startup joint pose at 0.5 rad/s, keeping its gripper
 target and remaining untracked afterward. Save any recording before returning.
-Recording writes the selected arm's measured state, commands and all three
-cameras as LeRobot v2.1 episodes. Use `--dataset-dir` and `--task` to override
+Recording writes the selected arm's measured state and commands, real overhead
+and controlled-arm wrist video, and blank frames for the uncontrolled wrist as
+LeRobot v2.1 episodes. The uncontrolled wrist camera is not opened.
+Use `--dataset-dir` and `--task` to override
 the folder and task text. Kill disables only the controlled arm and gripper's torque,
 without homing; it does not disconnect the physical supply.
 
 To record just explicitly selected cameras, pass `--record-cameras overhead`
 or another list of station camera roles. The default remains all three. The
-dataset's video features match that selection; missing views are not invented.
+dataset's video features match that selection. Only the uncontrolled wrist is
+blanked; the selected overhead and controlled wrist cameras must deliver frames.
 
 Per-side locks let this controller coexist with a compatible controller for the
 opposite arm; legacy whole-station controllers remain exclusive. The collection
