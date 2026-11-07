@@ -11,7 +11,8 @@ class Controls:
         self._lock = threading.Lock()
         self._state = dict(tracking=False, scale=scale, side=side, dry_run=dry_run, revision=0,
                            arm_open=False, recording=False, recording_requested=False, frames=0,
-                           saved_episodes=0, dataset_dir="", power_off=False, killing=False, message="")
+                           saved_episodes=0, dataset_dir="", power_off=False, killing=False, message="",
+                           home_requested=False, homing=False)
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -39,6 +40,19 @@ class Controls:
                 if any(self._state[key] != value for key, value in updates.items() if key in ("tracking", "scale")):
                     self._state["revision"] += 1
                 self._state.update(updates)
+                if updates.get("tracking"):
+                    self._state.update(home_requested=False, homing=False)
+            return self._state.copy()
+
+    def request_home(self) -> dict:
+        with self._lock:
+            if not self._state["arm_open"]:
+                raise ValueError("Track to open the arm before returning")
+            if self._state["recording"] or self._state["recording_requested"]:
+                raise ValueError("Save the recording before returning, as with the existing Home control")
+            self._state.update(tracking=False, home_requested=True, homing=True,
+                               message="Returning to the captured startup pose")
+            self._state["revision"] += 1
             return self._state.copy()
 
     def report(self, **values) -> None:
@@ -71,6 +85,7 @@ class LeaderDashboard:
             def do_POST(self):  # noqa: N802
                 if self.path == "/api/kill":
                     controls.change({"tracking": False, "recording_requested": False})
+                    controls.report(home_requested=False, homing=False)
                     side = controls.snapshot()["side"]
                     controls.report(killing=True, message=f"Disabling {side} arm…")
                     try:
@@ -84,6 +99,14 @@ class LeaderDashboard:
                         self.reply(500, json.dumps(controls.snapshot()).encode(), "application/json")
                         return
                     self.reply(200, json.dumps(controls.snapshot()).encode(), "application/json")
+                    return
+                if self.path == "/api/home":
+                    try:
+                        state = controls.request_home()
+                    except ValueError as error:
+                        self.reply(400, json.dumps({"error": str(error)}).encode(), "application/json")
+                        return
+                    self.reply(200, json.dumps(state).encode(), "application/json")
                     return
                 if self.path != "/api/control":
                     self.reply(404, b"Not found", "text/plain")
@@ -125,6 +148,7 @@ font-family:inherit;font-size:18px;font-weight:600;cursor:pointer;transition:bac
 button[data-tracking=true]{background:#30383f;color:#f1f3f5;border:1px solid #56616a}
 #record{margin-top:12px;background:#252c31;color:#edf0f3;border:1px solid #414b53;padding:16px;font-size:15px}
 #record[data-recording=true]{color:#ffb4ac;border-color:#b34f48}
+#home{margin-top:12px;background:#252c31;color:#edf0f3;border:1px solid #414b53;padding:16px;font-size:15px}
 #kill{margin-top:24px;background:#b52f32;color:#fff;padding:17px;font-size:15px;letter-spacing:.025em}
 button:disabled{opacity:.45;cursor:default}
 button:hover{filter:brightness(1.08)}
@@ -140,6 +164,7 @@ input{width:100%;accent-color:#b5f2cb;cursor:pointer}
 <h1>Leader control</h1><p id="hint">Untracked. Position the leader, then track.</p>
 <button id="track" type="button" aria-pressed="false">Track</button>
 <button id="record" type="button" aria-pressed="false">Record example</button>
+<button id="home" type="button">Return to 0</button>
 <div class="scale"><label class="label" for="scale"><span>Translation scale</span>
 <output id="value">1.00×</output></label>
 <input id="scale" type="range" min="0" max="3" step="0.05" value="1" aria-label="Translation scale">
@@ -149,25 +174,30 @@ input{width:100%;accent-color:#b5f2cb;cursor:pointer}
 </main><script>
 const button=document.getElementById('track'),slider=document.getElementById('scale');
 const record=document.getElementById('record'),kill=document.getElementById('kill');
+const home=document.getElementById('home');
 let tracking=false,recording=false,dragging=false,chain=Promise.resolve();
 function render(s){tracking=s.tracking;button.textContent=tracking?'Untrack':'Track';
 button.dataset.tracking=tracking;button.setAttribute('aria-pressed',String(tracking));
 document.getElementById('side').textContent=(s.side==='right'?'Right':'Left')+' arm'+(s.dry_run?' · dry run':'');
 document.getElementById('hint').textContent=s.power_off?
 (s.side==='right'?'Right':'Left')+' arm: motor torque off. Track reopens this arm.':
+s.homing?'Returning to the captured startup pose.':
 tracking?'Tracking leader motion.':'Untracked. Position the leader, then track.';
 recording=s.recording_requested;record.textContent=recording?'Stop & save example':'Record example';
 record.dataset.recording=recording;record.setAttribute('aria-pressed',String(recording));
 record.disabled=!s.arm_open||s.dry_run;kill.textContent=s.killing?'Disabling arm…':'Kill arm';
+home.textContent=s.homing?'Returning…':'Return to 0';
+home.disabled=!s.arm_open||s.homing||s.recording||s.recording_requested;
 document.getElementById('message').textContent=s.recording?'Recording · '+s.frames+' frames':s.message;
 if(!dragging){slider.value=s.scale;document.getElementById('value').textContent=Number(s.scale).toFixed(2)+'×';}}
-function send(values){chain=chain.catch(()=>{}).then(async()=>{
-const r=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
+function send(values,path='/api/control'){chain=chain.catch(()=>{}).then(async()=>{
+const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify(values)});
 const s=await r.json();if(!r.ok)throw Error(s.error);render(s);
 }).catch(e=>{document.getElementById('message').textContent=e.message;});return chain;}
 button.onclick=()=>send({tracking:!tracking});
 record.onclick=()=>send({recording_requested:!recording});
+home.onclick=()=>send({},'/api/home');
 kill.onclick=async()=>{try{const r=await fetch('/api/kill',{method:'POST'});const s=await r.json();render(s);}
 catch(e){document.getElementById('message').textContent=e.message;}};
 slider.oninput=()=>{dragging=true;document.getElementById('value').textContent=Number(slider.value).toFixed(2)+'×';};

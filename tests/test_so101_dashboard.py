@@ -67,7 +67,7 @@ class DashboardTests(unittest.TestCase):
         try:
             with urllib.request.urlopen(url) as response:
                 html = response.read().decode()
-            self.assertEqual(html.count('<button '), 3)
+            self.assertEqual(html.count('<button '), 4)
             self.assertEqual(html.count('type="range"'), 1)
             for change in ({"tracking": True}, {"scale": 1.75}, {"tracking": False}):
                 request = urllib.request.Request(url + "/api/control", data=json.dumps(change).encode(),
@@ -112,6 +112,49 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(controls.change({"recording_requested": True})["recording_requested"])
         self.assertFalse(controls.change({"recording_requested": False})["recording_requested"])
         self.assertEqual(controls.snapshot()["revision"], revision)
+
+    def test_return_endpoint_uses_home_request_and_stops_tracking(self):
+        controls = Controls(1.0, "right")
+        controls.report(arm_open=True)
+        controls.change({"tracking": True})
+        dashboard = LeaderDashboard(controls, 0)
+        try:
+            request = urllib.request.Request(f"http://127.0.0.1:{dashboard.port}/api/home", data=b"")
+            with urllib.request.urlopen(request) as response:
+                state = json.load(response)
+            self.assertFalse(state["tracking"])
+            self.assertTrue(state["home_requested"])
+            self.assertTrue(state["homing"])
+            self.assertEqual(state["side"], "right")
+            state = controls.change({"tracking": True})
+            self.assertFalse(state["home_requested"])
+            self.assertFalse(state["homing"])
+        finally:
+            dashboard.close()
+
+    def test_home_matches_existing_recording_rule(self):
+        controls = Controls(1.0, "right")
+        controls.report(arm_open=True, recording=True)
+        with self.assertRaisesRegex(ValueError, "Save the recording"):
+            controls.request_home()
+        self.assertFalse(controls.snapshot()["home_requested"])
+
+
+class ReturnMotionTests(unittest.TestCase):
+    def test_shared_home_motion_returns_to_nonzero_start_at_existing_speed(self):
+        from dream_hackathon import teleop
+
+        start = np.array([0.4, -0.7, 0.2, 0.9, -0.1, 0.3])
+        command = start + np.array([0.2, -0.3, 0.1, -0.2, 0.4, -0.4])
+        arrived = False
+        for _ in range(120):
+            previous = command.copy()
+            command, arrived = teleop.home_step(command, start, 1 / 30)
+            self.assertLessEqual(float(np.max(np.abs(command - previous))), 0.5 / 30 + 1e-12)
+            if arrived:
+                break
+        self.assertTrue(arrived)
+        np.testing.assert_allclose(command, start, atol=1e-3)
 
 
 if __name__ == "__main__":

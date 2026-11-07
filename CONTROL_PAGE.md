@@ -21,6 +21,11 @@ own tunnel. Do not start another controller to open another copy of the page.
   Untrack holds the last arm and gripper targets. Retracking captures new anchors.
 - **Translation scale:** 0–3 metres of follower motion per metre of leader motion.
   Rotation follows relative leader rotation. Changing scale re-anchors the mapping.
+- **Return to 0:** Uses the existing Home motion to return only the controlled
+  arm to the joint pose captured when it was opened, at 0.5 rad/s. The gripper
+  target stays unchanged. The arm remains powered and untracked afterward;
+  Track captures fresh leader/tool anchors. As with the existing control, save
+  an active recording before returning. Kill arm interrupts a return directly.
 - **Record example / Stop & save example:** After the arm has been opened with
   Track, records its measured joints/gripper, commanded joints/gripper, and all
   three station cameras. Stop & save commits a LeRobot v2.1 episode on NUCK-1.
@@ -60,6 +65,8 @@ instead of switching that checkout. The relevant files are:
 - `so101_recording.py`: camera and LeRobot episode recording.
 - `arms/makermods.py`: selected follower startup and explicit `power_off()`.
 - `station_lock.py`: per-side ownership compatible with the legacy station lock.
+- `teleop.home_step`: shared return motion used by the original Home control
+  and the leader dashboard's Return to 0 button.
 - `docs/so101_leader.md`: calibration, model/frame alignment, and command flags.
 - `tests/test_so101*.py`: pose mapping, UI API, kill behavior, and real encoded
   dataset tests. The power tests mock hardware; they never press live Kill.
@@ -91,5 +98,6 @@ and task label. `--dry-run` computes targets without sending them and does not
 record live examples. Do not commit `configs/station.yaml` or calibration data.
 
 HTTP endpoints: `GET /api/state`, `POST /api/control` with JSON `tracking`,
-`scale`, or `recording_requested`, and `POST /api/kill` with no body. Browser
+`scale`, or `recording_requested`, plus `POST /api/home` and `POST /api/kill`
+with no body. Browser
 controls connect only to the station through the SSH tunnel.

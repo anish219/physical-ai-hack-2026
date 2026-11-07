@@ -59,9 +59,9 @@ from dream_hackathon import (
 )
 
 ## Homing and the end-of-session return move every joint at most this fast.
-HOME_SPEED_RAD_S = 0.5
+HOME_SPEED_RAD_S = teleop.HOME_SPEED_RAD_S
 ## Homing is done when every joint is this close to its start.
-HOME_TOLERANCE_RAD = 1e-3
+HOME_TOLERANCE_RAD = teleop.HOME_TOLERANCE_RAD
 ## A live arm whose measured joints fall this far behind the command is re-synced and its clutch released.
 MAX_TRACKING_ERROR_RAD = 0.35
 ## Homing gives up (and the arms stop where they are) after this long.
@@ -354,12 +354,11 @@ class Collector:
             self._command.grips[side] = 1.0 - state.trigger[side]
 
     def _step_home(self) -> None:
-        max_step = HOME_SPEED_RAD_S * self._dt_s
         done = True
         for side, start in self._robot.start_joints.items():
-            joints = teleop.step_toward(self._command.joints[side], start, max_step)
+            joints, arrived = teleop.home_step(self._command.joints[side], start, self._dt_s)
             self._command.joints[side] = joints
-            done = done and bool(np.all(np.abs(joints - start) <= HOME_TOLERANCE_RAD))
+            done = done and arrived
         if done:
             self.homing = False
 

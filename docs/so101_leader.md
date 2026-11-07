@@ -64,6 +64,9 @@ The driver expects servo IDs 1–6, base to gripper. --leader-urdf and
 --leader-tool-link allow a different leader model or fixed tool frame.
 
 The page also offers **Record example / Stop & save example** and **Kill arm**.
+**Return to 0** shares the existing Home command's motion: the selected arm
+returns to its captured startup joint pose at 0.5 rad/s, keeping its gripper
+target and remaining untracked afterward. Save any recording before returning.
 Recording writes the selected arm's measured state, commands and all three
 cameras as LeRobot v2.1 episodes. Use `--dataset-dir` and `--task` to override
 the folder and task text. Kill disables only the controlled arm and gripper's torque,

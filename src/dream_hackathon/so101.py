@@ -135,7 +135,7 @@ def main() -> None:
                 print(leader.get_action(), flush=True)
                 time.sleep(1 / args.hz)
 
-        from dream_hackathon import config, station_lock
+        from dream_hackathon import config, station_lock, teleop
         from dream_hackathon.arms.makermods import MakerModsArms, teleop_ik
         from dream_hackathon.so101_dashboard import Controls, LeaderDashboard
         from dream_hackathon.so101_power import kill_controlled_arm
@@ -177,6 +177,7 @@ def main() -> None:
               f"{'dry run' if args.dry_run else 'live'}. Ctrl+C exits.", flush=True)
         printed = 0.0
         next_frame = 0.0
+        return_goal = None
         while True:
             tick = time.monotonic()
             action = leader.get_action()
@@ -194,10 +195,22 @@ def main() -> None:
                     if state["tracking"] and tracker.mapping is None:
                         joints, grips = robot.read()
                         command, grip = joints[args.side].copy(), grips[args.side]
-                    target_pose = tracker.update(leader_fk.pose(action), solver.fk(command), state)
-                    if target_pose is not None:
-                        command = solver.step(target_pose, command, 1 / args.hz)
-                        grip = action["gripper.pos"] / 100.0
+                    target_pose = None
+                    if state["home_requested"]:
+                        if return_goal is None:
+                            return_goal = robot.start_joints[args.side].copy()
+                        tracker.mapping = None
+                        command, arrived = teleop.home_step(command, return_goal, 1 / args.hz)
+                        if arrived:
+                            return_goal = None
+                            controls.report(home_requested=False, homing=False,
+                                            message="Returned to the captured startup pose")
+                    else:
+                        return_goal = None
+                        target_pose = tracker.update(leader_fk.pose(action), solver.fk(command), state)
+                        if target_pose is not None:
+                            command = solver.step(target_pose, command, 1 / args.hz)
+                            grip = action["gripper.pos"] / 100.0
                     if args.dry_run and target_pose is not None and tick - printed >= 1:
                         print(f"{args.side}: tool_xyz_m={target_pose[:3, 3].round(4)} "
                               f"joints_deg={np.degrees(command).round(2)} gripper={grip:.3f}", flush=True)
