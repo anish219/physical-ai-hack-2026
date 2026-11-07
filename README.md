@@ -14,6 +14,10 @@ This kit drives two follower arms from the Quest's controllers, records each dem
 
 Every station has one overhead camera and one camera on each wrist (USB webcams or Intel RealSense).
 
+## SO-101 leader control on NUCK-1
+
+See [CONTROL_PAGE.md](CONTROL_PAGE.md) to open the shared Track/Untrack, motion scale, recording and motor kill dashboard. It includes teammate connection instructions and the controller source map.
+
 ## For participants
 
 Your station is ready: the arms, cameras, Quest and the Dream library are set up, and its config is `configs/station.yaml`. The station has no screen: you work on it over SSH from your laptop, and watch it in your laptop's browser.

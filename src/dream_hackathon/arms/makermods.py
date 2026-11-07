@@ -64,7 +64,7 @@ class MakerModsArms:
         self._devices: dict[str, Any] = {}
         self._rest_poses: list[tuple[Any, dict[str, float]]] = []
         try:
-            for side in ("left", "right"):
+            for side in station.arms:
                 device = Follower(
                     FollowerConfig(
                         port=station.arms[side].port, id=f"dream_hackathon_{side}", can_interface=mm.can_interface
@@ -97,6 +97,15 @@ class MakerModsArms:
             sends.append(self._pool.submit(device.send_action, action))
         for send in sends:
             send.result()
+
+    def power_off(self) -> list[str]:
+        """Disable every open follower's motor torque now, without a return motion."""
+        self._rest_poses = []
+        self.energized = False
+        problems = []
+        for side, device in self._devices.items():
+            problems.extend(self._family.release_torque(device, f"{side} follower arm"))
+        return problems
 
     def close(self) -> None:
         """Returns both arms to where they started (makermodslab's gentle rate), releases torque, disconnects."""
