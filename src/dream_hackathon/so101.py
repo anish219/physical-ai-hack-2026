@@ -126,6 +126,8 @@ def main() -> None:
     parser.add_argument("--dataset-dir", type=pathlib.Path,
                         help="Examples folder (default: station dataset/so101/SIDE)")
     parser.add_argument("--task", help="Task text saved with each example")
+    parser.add_argument("--record-cameras", nargs="+", choices=("overhead", "wrist_l", "wrist_r"),
+                        default=["overhead", "wrist_l", "wrist_r"], help="Camera roles explicitly recorded")
     args = parser.parse_args()
     if args.hz <= 0:
         parser.error("--hz must be positive")
@@ -166,7 +168,7 @@ def main() -> None:
         tracker = ToolTracker(base_rotation(args.leader_to_base_rpy_deg))
         root = (args.dataset_dir or whole_station.dataset_dir / "so101" / args.side).expanduser()
         recorder = ExampleRecorder(whole_station, args.side, root,
-                                   args.task or whole_station.task or "do the demonstrated task")
+                                   args.task or whole_station.task or "do the demonstrated task", args.record_cameras)
         controls.report(dataset_dir=str(root))
 
         def kill_arm():
@@ -244,7 +246,7 @@ def main() -> None:
                 requested = controls.snapshot()["recording_requested"]
                 if requested and recorder.episode is None:
                     recorder.start()
-                    controls.report(recording=True, frames=0, message="")
+                    controls.report(recording=True, frames=0, message="", recording_error="")
                     next_frame = 0.0
                     sample = None
                 if not requested and recorder.episode is not None:
@@ -257,12 +259,14 @@ def main() -> None:
                     next_frame = tick + 1 / whole_station.fps - 1e-6
             except Exception as error:
                 controls.change({"recording_requested": False})
-                controls.report(recording=False, message=f"Recording: {error}")
+                controls.report(recording=False, recording_error=str(error))
+                print(f"Recording failed: {error}", flush=True)
                 if recorder.episode is not None:
                     try:
                         recorder.stop()
                     except Exception as save_error:
-                        controls.report(message=f"Recording: {error}; save: {save_error}")
+                        controls.report(recording_error=f"{error}; save: {save_error}")
+                        print(f"Recording save failed: {save_error}", flush=True)
             time.sleep(max(0, 1 / args.hz - (time.monotonic() - tick)))
     except KeyboardInterrupt:
         pass

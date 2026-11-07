@@ -6,8 +6,10 @@ import numpy as np
 
 
 class ExampleRecorder:
-    def __init__(self, station, side: str, root: pathlib.Path, task: str) -> None:
+    def __init__(self, station, side: str, root: pathlib.Path, task: str,
+                 camera_roles=("overhead", "wrist_l", "wrist_r")) -> None:
         self.station, self.side, self.root, self.task = station, side, root, task
+        self.camera_roles = tuple(camera_roles)
         self.cameras = {}
         self.writer = None
         self.episode = None
@@ -21,13 +23,14 @@ class ExampleRecorder:
 
         if not self.cameras:
             self.cameras = cameras.open_cameras(
-                self.station.cameras, self.station.record_width, self.station.record_height
+                tuple(c for c in self.station.cameras if c.role in self.camera_roles),
+                self.station.record_width, self.station.record_height
             )
         if self.writer is None:
             names = [f"{self.side}_joint_{i}" for i in range(6)] + [f"{self.side}_gripper"]
             self.writer = dataset.DatasetWriter(
                 self.root, self.station.fps, self.station.arm, names,
-                list(layouts.video_keys(self.station.family).values()),
+                [key for role, key in layouts.video_keys(self.station.family).items() if role in self.camera_roles],
                 self.station.record_width, self.station.record_height,
             )
         self.episode = self.writer.start_episode(self.task)
@@ -38,7 +41,8 @@ class ExampleRecorder:
         scale = layouts.GRIP_SCALE[self.station.arm]
         measured = np.append(joints, grip * scale).astype(np.float32)
         action = np.append(command, commanded_grip * scale).astype(np.float32)
-        images = {key: self.cameras[role].latest() for role, key in layouts.video_keys(self.station.family).items()}
+        images = {key: self.cameras[role].latest() for role, key in layouts.video_keys(self.station.family).items()
+                  if role in self.camera_roles}
         self.episode.add_frame(measured, action, images)
 
     def stop(self) -> int | None:

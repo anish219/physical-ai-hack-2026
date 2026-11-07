@@ -113,6 +113,16 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(controls.change({"recording_requested": False})["recording_requested"])
         self.assertEqual(controls.snapshot()["revision"], revision)
 
+    def test_recording_error_survives_home_and_tracking_status_updates(self):
+        controls = Controls(1.0, "right")
+        controls.report(arm_open=True, recording_error="camera wrist_l: cannot open device")
+        controls.request_home()
+        controls.report(homing=False, home_requested=False, message="Returned to the captured startup pose")
+        self.assertIn("camera wrist_l", controls.snapshot()["recording_error"])
+        controls.change({"tracking": True})
+        controls.report(message="")
+        self.assertIn("camera wrist_l", controls.snapshot()["recording_error"])
+
     def test_return_endpoint_uses_home_request_and_stops_tracking(self):
         controls = Controls(1.0, "right")
         controls.report(arm_open=True)

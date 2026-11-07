@@ -78,6 +78,32 @@ class KillTests(unittest.TestCase):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_explicit_overhead_only_dataset_has_one_video_feature(self):
+        try:
+            from dream_hackathon import dataset
+            import json
+        except ImportError:
+            self.skipTest("needs video and dataset dependencies")
+        station = types.SimpleNamespace(arm="metal", family="makermods")
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            recorder = ExampleRecorder(station, "right", root, "move the cube", ("overhead",))
+            camera = Mock()
+            camera.latest.return_value = np.zeros((90, 160, 3), dtype=np.uint8)
+            recorder.cameras = {"overhead": camera}
+            names = [f"right_joint_{i}" for i in range(6)] + ["right_gripper"]
+            recorder.writer = dataset.DatasetWriter(
+                root, 30, "metal", names, ["observation.images.scene"], 160, 90
+            )
+            recorder.start()
+            for _ in range(dataset.min_frames(30)):
+                recorder.add(np.zeros(6), 0.25, np.ones(6), 0.75)
+            recorder.stop()
+            info = json.loads((root / "meta/info.json").read_text())
+            video_features = {key for key, value in info["features"].items() if value["dtype"] == "video"}
+            self.assertEqual(video_features, {"observation.images.scene"})
+            self.assertEqual(len(list((root / "videos").rglob("*.mp4"))), 1)
+
     def test_real_dataset_contains_measured_action_vectors_and_videos(self):
         try:
             from dream_hackathon import dataset, layouts

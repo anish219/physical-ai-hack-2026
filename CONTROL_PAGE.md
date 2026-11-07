@@ -31,6 +31,10 @@ own tunnel. Do not start another controller to open another copy of the page.
   three station cameras. Stop & save commits a LeRobot v2.1 episode on NUCK-1.
   The page reports the folder and saved episode number. The writer requires at
   least 1.6 seconds (49 frames at 30 fps). Recording works while untracked too.
+  `--record-cameras overhead` explicitly selects a one-camera recording;
+  the default is `overhead wrist_l wrist_r`. Only selected video features are
+  written, with no substituted images for missing cameras. Recording errors
+  stay visible even after a Home or tracking action changes the general status.
 - **Kill arm:** Stops this controller's tracking and recording request and sends
   motor torque-disable commands to **only the selected arm and its gripper**.
   The other arm is untouched. It does **not home** the controlled arm.

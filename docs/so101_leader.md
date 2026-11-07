@@ -72,6 +72,10 @@ cameras as LeRobot v2.1 episodes. Use `--dataset-dir` and `--task` to override
 the folder and task text. Kill disables only the controlled arm and gripper's torque,
 without homing; it does not disconnect the physical supply.
 
+To record just explicitly selected cameras, pass `--record-cameras overhead`
+or another list of station camera roles. The default remains all three. The
+dataset's video features match that selection; missing views are not invented.
+
 Per-side locks let this controller coexist with a compatible controller for the
 opposite arm; legacy whole-station controllers remain exclusive. The collection
 dashboard is separate. See [CONTROL_PAGE.md](../CONTROL_PAGE.md) for teammates'

@@ -12,7 +12,7 @@ class Controls:
         self._state = dict(tracking=False, scale=scale, side=side, dry_run=dry_run, revision=0,
                            arm_open=False, recording=False, recording_requested=False, frames=0,
                            saved_episodes=0, dataset_dir="", power_off=False, killing=False, message="",
-                           home_requested=False, homing=False)
+                           home_requested=False, homing=False, recording_error="")
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -158,7 +158,7 @@ button:focus-visible,input:focus-visible{outline:2px solid #b5f2cb;outline-offse
 output{font-variant-numeric:tabular-nums;color:#b5f2cb;font-size:18px}
 input{width:100%;accent-color:#b5f2cb;cursor:pointer}
 .ends{display:flex;justify-content:space-between;color:#737e87;font-size:11px;margin-top:9px}
-#message{min-height:22px;font-size:12px;color:#b6bec5;margin-top:24px}
+#message{min-height:22px;font-size:12px;color:#b6bec5;margin-top:24px;white-space:pre-line}
 </style></head><body><main>
 <header><span class="eyebrow">SO-101 / Metal</span><span class="mode" id="side">Right arm</span></header>
 <h1>Leader control</h1><p id="hint">Untracked. Position the leader, then track.</p>
@@ -188,7 +188,8 @@ record.dataset.recording=recording;record.setAttribute('aria-pressed',String(rec
 record.disabled=!s.arm_open||s.dry_run;kill.textContent=s.killing?'Disabling arm…':'Kill arm';
 home.textContent=s.homing?'Returning…':'Return to 0';
 home.disabled=!s.arm_open||s.homing||s.recording||s.recording_requested;
-document.getElementById('message').textContent=s.recording?'Recording · '+s.frames+' frames':s.message;
+document.getElementById('message').textContent=s.recording?'Recording · '+s.frames+' frames':
+[s.message,s.recording_error?'Recording: '+s.recording_error:''].filter(Boolean).join('\\n');
 if(!dragging){slider.value=s.scale;document.getElementById('value').textContent=Number(s.scale).toFixed(2)+'×';}}
 function send(values,path='/api/control'){chain=chain.catch(()=>{}).then(async()=>{
 const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
