@@ -71,15 +71,16 @@ class LeaderDashboard:
             def do_POST(self):  # noqa: N802
                 if self.path == "/api/kill":
                     controls.change({"tracking": False, "recording_requested": False})
-                    controls.report(killing=True, message="Disabling both arms…")
+                    side = controls.snapshot()["side"]
+                    controls.report(killing=True, message=f"Disabling {side} arm…")
                     try:
                         if on_kill is None:
                             raise RuntimeError("motor power control is not connected")
                         problems = on_kill()
                         controls.report(power_off=not problems, arm_open=False, killing=False,
-                                        message="; ".join(problems) if problems else "Both arms: motor torque off")
+                                        message="; ".join(problems) if problems else f"{side.title()} arm: motor torque off")
                     except Exception as error:
-                        controls.report(killing=False, message=f"Kill arms failed: {error}")
+                        controls.report(killing=False, message=f"Kill arm failed: {error}")
                         self.reply(500, json.dumps(controls.snapshot()).encode(), "application/json")
                         return
                     self.reply(200, json.dumps(controls.snapshot()).encode(), "application/json")
@@ -143,7 +144,7 @@ input{width:100%;accent-color:#b5f2cb;cursor:pointer}
 <output id="value">1.00×</output></label>
 <input id="scale" type="range" min="0" max="3" step="0.05" value="1" aria-label="Translation scale">
 <div class="ends"><span>0×</span><span>3×</span></div></div>
-<button id="kill" type="button">Kill arms</button>
+<button id="kill" type="button">Kill arm</button>
 <div id="message" role="status"></div>
 </main><script>
 const button=document.getElementById('track'),slider=document.getElementById('scale');
@@ -152,11 +153,12 @@ let tracking=false,recording=false,dragging=false,chain=Promise.resolve();
 function render(s){tracking=s.tracking;button.textContent=tracking?'Untrack':'Track';
 button.dataset.tracking=tracking;button.setAttribute('aria-pressed',String(tracking));
 document.getElementById('side').textContent=(s.side==='right'?'Right':'Left')+' arm'+(s.dry_run?' · dry run':'');
-document.getElementById('hint').textContent=s.power_off?'Both arms: motor torque off. Track reopens the selected arm.':
+document.getElementById('hint').textContent=s.power_off?
+(s.side==='right'?'Right':'Left')+' arm: motor torque off. Track reopens this arm.':
 tracking?'Tracking leader motion.':'Untracked. Position the leader, then track.';
 recording=s.recording_requested;record.textContent=recording?'Stop & save example':'Record example';
 record.dataset.recording=recording;record.setAttribute('aria-pressed',String(recording));
-record.disabled=!s.arm_open||s.dry_run;kill.textContent=s.killing?'Disabling arms…':'Kill arms';
+record.disabled=!s.arm_open||s.dry_run;kill.textContent=s.killing?'Disabling arm…':'Kill arm';
 document.getElementById('message').textContent=s.recording?'Recording · '+s.frames+' frames':s.message;
 if(!dragging){slider.value=s.scale;document.getElementById('value').textContent=Number(s.scale).toFixed(2)+'×';}}
 function send(values){chain=chain.catch(()=>{}).then(async()=>{

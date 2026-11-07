@@ -26,9 +26,10 @@ own tunnel. Do not start another controller to open another copy of the page.
   three station cameras. Stop & save commits a LeRobot v2.1 episode on NUCK-1.
   The page reports the folder and saved episode number. The writer requires at
   least 1.6 seconds (49 frames at 30 fps). Recording works while untracked too.
-- **Kill arms:** Stops this controller's tracking and recording request and sends
-  motor torque-disable commands to **both Metal arms and their grippers**. It
-  does **not home** the arms. This is a software torque-off command; it does not
+- **Kill arm:** Stops this controller's tracking and recording request and sends
+  motor torque-disable commands to **only the selected arm and its gripper**.
+  The other arm is untouched. It does **not home** the controlled arm.
+  This is a software torque-off command; it does not
   disconnect the physical electrical supply. The page reports disable errors.
   Track explicitly reopens and enables only the selected follower afterward.
 
@@ -55,7 +56,7 @@ instead of switching that checkout. The relevant files are:
 
 - `src/dream_hackathon/so101.py`: leader FK, tool-space mapping, IK, control loop.
 - `so101_dashboard.py`: HTTP page/state/control/kill endpoints.
-- `so101_power.py`: both-arm torque-off; no enable handshake or homing.
+- `so101_power.py`: selected-arm torque-off; no enable handshake or homing.
 - `so101_recording.py`: camera and LeRobot episode recording.
 - `arms/makermods.py`: selected follower startup and explicit `power_off()`.
 - `station_lock.py`: per-side ownership compatible with the legacy station lock.

@@ -63,10 +63,10 @@ Leader-only reads and explicit recalibration use the saved ID hackathon_so101:
 The driver expects servo IDs 1–6, base to gripper. --leader-urdf and
 --leader-tool-link allow a different leader model or fixed tool frame.
 
-The page also offers **Record example / Stop & save example** and **Kill arms**.
+The page also offers **Record example / Stop & save example** and **Kill arm**.
 Recording writes the selected arm's measured state, commands and all three
 cameras as LeRobot v2.1 episodes. Use `--dataset-dir` and `--task` to override
-the folder and task text. Kill disables both arms' motor torque directly,
+the folder and task text. Kill disables only the controlled arm and gripper's torque,
 without homing; it does not disconnect the physical supply.
 
 Per-side locks let this controller coexist with a compatible controller for the

@@ -138,7 +138,7 @@ def main() -> None:
         from dream_hackathon import config, station_lock
         from dream_hackathon.arms.makermods import MakerModsArms, teleop_ik
         from dream_hackathon.so101_dashboard import Controls, LeaderDashboard
-        from dream_hackathon.so101_power import kill_station_arms
+        from dream_hackathon.so101_power import kill_controlled_arm
         from dream_hackathon.so101_recording import ExampleRecorder
 
         station = config.load(args.config)
@@ -155,14 +155,14 @@ def main() -> None:
                                    args.task or whole_station.task or "do the demonstrated task")
         controls.report(dataset_dir=str(root))
 
-        def kill_arms():
+        def kill_arm():
             nonlocal robot, lock
             # Serialize disable with motor commands: no old command can follow the disable.
             with hardware_lock:
                 active, robot = robot, None
                 tracker.mapping = None
                 try:
-                    return kill_station_arms(whole_station, active)
+                    return kill_controlled_arm(station, args.side, active)
                 finally:
                     if lock is not None:
                         lock.close()
@@ -171,7 +171,7 @@ def main() -> None:
         if args.no_dashboard:
             controls.change({"tracking": True})
         else:
-            dashboard = LeaderDashboard(controls, args.dashboard_port, on_kill=kill_arms)
+            dashboard = LeaderDashboard(controls, args.dashboard_port, on_kill=kill_arm)
             print(f"dashboard: http://127.0.0.1:{dashboard.port} (starts untracked)", flush=True)
         print(f"SO-101 tool pose -> {args.side} Metal tool pose; "
               f"{'dry run' if args.dry_run else 'live'}. Ctrl+C exits.", flush=True)
@@ -208,7 +208,7 @@ def main() -> None:
                         measured, measured_grips = robot.read()
                         sample = (measured[args.side], measured_grips[args.side], command.copy(), grip)
             # Camera opening and video encoding never hold the motor-command mutex,
-            # so Kill arms can disable motors while an example starts or saves.
+            # so Kill arm can disable motors while an example starts or saves.
             try:
                 requested = controls.snapshot()["recording_requested"]
                 if requested and recorder.episode is None:

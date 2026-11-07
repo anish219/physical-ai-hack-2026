@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from dream_hackathon.so101_power import kill_station_arms
+from dream_hackathon.so101_power import kill_controlled_arm
 from dream_hackathon.so101_recording import ExampleRecorder
 
 
@@ -31,12 +31,12 @@ class KillTests(unittest.TestCase):
         robot._family.return_to_rest.assert_not_called()
         robot._family.release_torque.assert_called_once()
 
-    def test_both_buses_disabled_even_when_one_fails(self):
+    def test_only_selected_bus_disabled_with_both_arms_configured(self):
         follower = Mock()
         module = types.ModuleType("lerobot.robots.metal_follower")
         module.MetalFollower = Mock(return_value=follower)
         module.MetalFollowerConfig = Mock(side_effect=lambda **kw: types.SimpleNamespace(**kw))
-        torque = types.SimpleNamespace(de_energize_can_bus=Mock(side_effect=[["left failed"], []]))
+        torque = types.SimpleNamespace(de_energize_can_bus=Mock(return_value=[]))
         maker = types.ModuleType("makermodslab")
         maker.torque = torque
         station = types.SimpleNamespace(
@@ -44,8 +44,14 @@ class KillTests(unittest.TestCase):
             makermods=types.SimpleNamespace(can_interface="slcan"),
         )
         with patch.dict(sys.modules, {"lerobot.robots.metal_follower": module, "makermodslab": maker}):
-            self.assertEqual(kill_station_arms(station), ["left failed"])
-        self.assertEqual(torque.de_energize_can_bus.call_count, 2)
+            for side in ("left", "right"):
+                with self.subTest(side=side):
+                    module.MetalFollower.reset_mock()
+                    torque.de_energize_can_bus.reset_mock()
+                    self.assertEqual(kill_controlled_arm(station, side), [])
+                    module.MetalFollower.assert_called_once()
+                    self.assertEqual(module.MetalFollower.call_args.args[0].port, side)
+                    torque.de_energize_can_bus.assert_called_once_with(follower.bus, f"{side} follower arm")
         follower.connect.assert_not_called()
         follower.send_action.assert_not_called()
 
@@ -60,9 +66,9 @@ class KillTests(unittest.TestCase):
         module.MetalFollower, module.MetalFollowerConfig = Mock(), Mock()
         maker = types.ModuleType("makermodslab")
         maker.torque = types.SimpleNamespace(de_energize_can_bus=Mock(return_value=[]))
-        station = types.SimpleNamespace(arms={"right": Mock()}, makermods=Mock())
+        station = types.SimpleNamespace(arms={"left": Mock(), "right": Mock()}, makermods=Mock())
         with patch.dict(sys.modules, {"lerobot.robots.metal_follower": module, "makermodslab": maker}):
-            self.assertEqual(kill_station_arms(station, active), [])
+            self.assertEqual(kill_controlled_arm(station, "right", active), [])
         self.assertEqual(calls, ["off", "close"])
         module.MetalFollower.assert_not_called()
 

@@ -100,6 +100,7 @@ class DashboardTests(unittest.TestCase):
             self.assertFalse(state["recording_requested"])
             self.assertFalse(state["arm_open"])
             self.assertTrue(state["power_off"])
+            self.assertEqual(state["message"], "Right arm: motor torque off")
         finally:
             dashboard.close()
 
