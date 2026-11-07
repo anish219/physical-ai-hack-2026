@@ -19,6 +19,34 @@ class ExampleRecorder:
     def frames(self) -> int:
         return self.episode.frames if self.episode is not None else 0
 
+    def saved_count(self) -> int:
+        from dream_hackathon import dataset
+
+        return len(dataset.list_episodes(self.root))
+
+    def reject(self, *, current_only: bool = False) -> str:
+        """Discard the active example, otherwise remove only the latest saved one."""
+        from dream_hackathon import dataset
+
+        if self.episode is not None:
+            episode, self.episode = self.episode, None
+            try:
+                episode.discard()
+                return "Rejected current example"
+            finally:
+                for camera in self.cameras.values():
+                    camera.close()
+                self.cameras = {}
+        if current_only:
+            return "Rejected pending example"
+        episodes = dataset.list_episodes(self.root)
+        if not episodes:
+            raise dataset.DatasetError("No example to reject")
+        index = episodes[-1].index
+        dataset.drop_episodes(self.root, {index})
+        self.writer = None
+        return f"Rejected saved example {index}"
+
     def start(self) -> None:
         from dream_hackathon import cameras, dataset, layouts
 

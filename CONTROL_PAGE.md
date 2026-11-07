@@ -16,7 +16,8 @@ use on your laptop, use `-L 8082:127.0.0.1:8081` and open http://localhost:8082.
 This is the same shared controller for every teammate; each laptop needs its
 own tunnel. Do not start another controller to open another copy of the page.
 
-- **Track / Untrack:** Track captures both tools' current poses, then maps SO-101
+- **Track and Untrack:** Separate action buttons, with a prominent TRACKED /
+  UNTRACKED indicator. Track captures both tools' current poses, then maps SO-101
   handle displacement/rotation to Metal end-effector targets through IK.
   Untrack holds the last arm and gripper targets. Retracking captures new anchors.
 - **Translation scale:** 0–3 metres of follower motion per metre of leader motion.
@@ -38,6 +39,19 @@ own tunnel. Do not start another controller to open another copy of the page.
   blank stream. The overhead and controlled wrist streams require real cameras;
   neither is substituted when missing. Recording errors
   stay visible even after a Home or tracking action changes the general status.
+- **Reject example:** While recording (or starting a recording), discards that
+  current example. Otherwise the button says **Reject last saved example** and
+  removes only the latest saved example, updating the dataset metadata. Reject
+  leaves tracking unchanged. Rejecting a pending recording never deletes an
+  older saved example.
+- **Grip holding torque:** Sets the existing SDK's motor-output holding target
+  from 0.1 to 2.0 N·m; the unchanged default is 0.5 N·m. The leader still sets jaw
+  opening. After contact, motor torque feedback regulates the hold target by
+  correcting the gripper position command. The page shows the applied target,
+  measured motor torque, and HOLDING state. This is not a fingertip force sensor
+  or an instantaneous peak-torque limit. The SDK's existing behavior remains in
+  use; no automatic force escalation is added. Change the slider explicitly for
+  stronger squeezing. Torque changes do not re-anchor arm tracking.
 - **Kill arm:** Stops this controller's tracking and recording request and sends
   motor torque-disable commands to **only the selected arm and its gripper**.
   The other arm is untouched. It does **not home** the controlled arm.
@@ -75,6 +89,7 @@ instead of switching that checkout. The relevant files are:
 - `so101_dashboard.py`: HTTP page/state/control/kill endpoints.
 - `so101_power.py`: selected-arm torque-off; no enable handshake or homing.
 - `so101_recording.py`: camera and LeRobot episode recording.
+- `so101_gripper.py`: selected-gripper effort updates and cached torque feedback.
 - `arms/makermods.py`: selected follower startup and explicit `power_off()`.
 - `station_lock.py`: per-side ownership compatible with the legacy station lock.
 - `teleop.home_step`: shared return motion used by the original Home control
@@ -110,6 +125,7 @@ and task label. `--dry-run` computes targets without sending them and does not
 record live examples. Do not commit `configs/station.yaml` or calibration data.
 
 HTTP endpoints: `GET /api/state`, `POST /api/control` with JSON `tracking`,
-`scale`, or `recording_requested`, plus `POST /api/home` and `POST /api/kill`
+`scale`, `grip_torque_nm`, or `recording_requested`, plus `POST /api/home`,
+`POST /api/reject`, and `POST /api/kill`
 with no body. Browser
 controls connect only to the station through the SSH tunnel.

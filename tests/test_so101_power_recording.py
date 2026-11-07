@@ -78,6 +78,40 @@ class KillTests(unittest.TestCase):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_reject_discards_current_or_only_latest_saved_and_writer_can_resume(self):
+        from dream_hackathon import cameras, dataset
+
+        station = types.SimpleNamespace(
+            arm="metal", family="makermods", fps=30, record_width=160, record_height=90,
+            cameras=(types.SimpleNamespace(role="overhead"),),
+        )
+        camera = Mock()
+        camera.latest.return_value = np.full((90, 160, 3), 123, dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as folder:
+            recorder = ExampleRecorder(station, "right", pathlib.Path(folder), "task", ("overhead",))
+            with patch.object(cameras, "open_cameras", return_value={"overhead": camera}):
+                for expected in (0, 1):
+                    recorder.start()
+                    for _ in range(dataset.min_frames(30)):
+                        recorder.add(np.zeros(6), 0, np.ones(6), 1)
+                    self.assertEqual(recorder.stop(), expected)
+                self.assertEqual(recorder.saved_count(), 2)
+                self.assertEqual(recorder.reject(), "Rejected saved example 1")
+                self.assertEqual(recorder.saved_count(), 1)
+                self.assertEqual(recorder.reject(current_only=True), "Rejected pending example")
+                self.assertEqual(recorder.saved_count(), 1)
+                recorder.start()
+                recorder.add(np.zeros(6), 0, np.ones(6), 1)
+                self.assertEqual(recorder.reject(current_only=True), "Rejected current example")
+                self.assertIsNone(recorder.episode)
+                self.assertEqual(recorder.saved_count(), 1)
+                recorder.start()
+                for _ in range(dataset.min_frames(30)):
+                    recorder.add(np.zeros(6), 0, np.ones(6), 1)
+                self.assertEqual(recorder.stop(), 1)
+                self.assertEqual(recorder.saved_count(), 2)
+            recorder.close()
+
     def test_only_overhead_and_controlled_wrist_are_opened_other_view_is_blank(self):
         from dream_hackathon import cameras, dataset, layouts
 

@@ -36,6 +36,14 @@ at the current target so the scale change does not jump the target.
 Use `--dashboard-port` to change the port, or `--no-dashboard` to start tracking
 immediately with command-line settings.
 
+Track and Untrack are separate buttons with a tracking-state indicator. Reject
+discards the current example or, while idle, the latest saved example. The
+Grip holding torque slider adjusts the SDK's contact-holding target (0.1–2.0
+N·m, default 0.5) with live motor-torque feedback. It regulates holding effort
+after contact; the leader continues to command jaw opening. Use
+`--gripper-hold-torque-nm` to choose the starting holding target. This is motor
+torque feedback, not a fingertip force measurement.
+
 Start the live dashboard for the right arm (the default), or select the left arm:
 
 ~~~bash

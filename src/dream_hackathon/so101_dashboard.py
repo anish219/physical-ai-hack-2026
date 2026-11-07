@@ -7,12 +7,15 @@ import threading
 
 
 class Controls:
-    def __init__(self, scale: float, side: str, dry_run: bool = False) -> None:
+    def __init__(self, scale: float, side: str, dry_run: bool = False, grip_torque_nm: float = 0.5) -> None:
         self._lock = threading.Lock()
         self._state = dict(tracking=False, scale=scale, side=side, dry_run=dry_run, revision=0,
                            arm_open=False, recording=False, recording_requested=False, frames=0,
                            saved_episodes=0, dataset_dir="", power_off=False, killing=False, message="",
-                           home_requested=False, homing=False, recording_error="")
+                           home_requested=False, homing=False, recording_error="", reject_requested=False,
+                           reject_kind="",
+                           grip_torque_nm=grip_torque_nm, grip_revision=0, grip_applied_torque_nm=None,
+                           grip_measured_torque_nm=None, grip_holding=False, grip_error="")
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -33,15 +36,31 @@ class Controls:
             if not isinstance(values["recording_requested"], bool):
                 raise ValueError("recording_requested must be true or false")
             updates["recording_requested"] = values["recording_requested"]
+        if "grip_torque_nm" in values:
+            value = values["grip_torque_nm"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.1 <= value <= 2.0:
+                raise ValueError("Grip holding torque must be between 0.1 and 2.0 N·m")
+            updates["grip_torque_nm"] = float(value)
         with self._lock:
             if updates.get("recording_requested") and (not self._state["arm_open"] or self._state["dry_run"]):
                 raise ValueError("Track to open the arm before recording; recording requires live mode")
             if any(self._state[key] != value for key, value in updates.items()):
                 if any(self._state[key] != value for key, value in updates.items() if key in ("tracking", "scale")):
                     self._state["revision"] += 1
+                if "grip_torque_nm" in updates and updates["grip_torque_nm"] != self._state["grip_torque_nm"]:
+                    self._state["grip_revision"] += 1
                 self._state.update(updates)
                 if updates.get("tracking"):
                     self._state.update(home_requested=False, homing=False)
+            return self._state.copy()
+
+    def request_reject(self) -> dict:
+        with self._lock:
+            if not (self._state["recording"] or self._state["recording_requested"] or self._state["saved_episodes"]):
+                raise ValueError("No example to reject")
+            current = self._state["recording"] or self._state["recording_requested"]
+            self._state.update(recording_requested=False, reject_requested=True,
+                               reject_kind="current" if current else "saved")
             return self._state.copy()
 
     def request_home(self) -> dict:
@@ -93,7 +112,10 @@ class LeaderDashboard:
                             raise RuntimeError("motor power control is not connected")
                         problems = on_kill()
                         controls.report(power_off=not problems, arm_open=False, killing=False,
-                                        message="; ".join(problems) if problems else f"{side.title()} arm: motor torque off")
+                                        grip_holding=False, grip_measured_torque_nm=None,
+                                        grip_applied_torque_nm=None,
+                                        message="; ".join(problems) if problems
+                                        else f"{side.title()} arm: motor torque off")
                     except Exception as error:
                         controls.report(killing=False, message=f"Kill arm failed: {error}")
                         self.reply(500, json.dumps(controls.snapshot()).encode(), "application/json")
@@ -103,6 +125,14 @@ class LeaderDashboard:
                 if self.path == "/api/home":
                     try:
                         state = controls.request_home()
+                    except ValueError as error:
+                        self.reply(400, json.dumps({"error": str(error)}).encode(), "application/json")
+                        return
+                    self.reply(200, json.dumps(state).encode(), "application/json")
+                    return
+                if self.path == "/api/reject":
+                    try:
+                        state = controls.request_reject()
                     except ValueError as error:
                         self.reply(400, json.dumps({"error": str(error)}).encode(), "application/json")
                         return
@@ -146,6 +176,13 @@ p{color:#939ca5;font-size:14px;line-height:1.6;margin:0 0 30px}
 button{width:100%;border:0;border-radius:14px;padding:22px;background:#b5f2cb;color:#10281a;
 font-family:inherit;font-size:18px;font-weight:600;cursor:pointer;transition:background .15s}
 button[data-tracking=true]{background:#30383f;color:#f1f3f5;border:1px solid #56616a}
+.tracking-buttons{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#untrack{background:#30383f;color:#f1f3f5;border:1px solid #56616a}
+#tracking-state{display:inline-block;padding:7px 11px;margin-bottom:18px;border-radius:20px;
+font-size:12px;font-weight:650;letter-spacing:.08em;background:#30383f;color:#c5cbd0}
+#tracking-state[data-tracked=true]{background:#b5f2cb;color:#10281a}
+#reject{margin-top:12px;background:transparent;color:#ffb4ac;border:1px solid #764641;padding:14px;font-size:14px}
+.feedback{font-size:12px;color:#a9b4bd;margin-top:12px;line-height:1.6}
 #record{margin-top:12px;background:#252c31;color:#edf0f3;border:1px solid #414b53;padding:16px;font-size:15px}
 #record[data-recording=true]{color:#ffb4ac;border-color:#b34f48}
 #home{margin-top:12px;background:#252c31;color:#edf0f3;border:1px solid #414b53;padding:16px;font-size:15px}
@@ -162,22 +199,34 @@ input{width:100%;accent-color:#b5f2cb;cursor:pointer}
 </style></head><body><main>
 <header><span class="eyebrow">SO-101 / Metal</span><span class="mode" id="side">Right arm</span></header>
 <h1>Leader control</h1><p id="hint">Untracked. Position the leader, then track.</p>
-<button id="track" type="button" aria-pressed="false">Track</button>
+<div id="tracking-state" role="status" aria-live="polite">UNTRACKED</div>
+<div class="tracking-buttons"><button id="track" type="button">Track</button>
+<button id="untrack" type="button">Untrack</button></div>
 <button id="record" type="button" aria-pressed="false">Record example</button>
+<button id="reject" type="button">Reject example</button>
 <button id="home" type="button">Return to 0</button>
 <div class="scale"><label class="label" for="scale"><span>Translation scale</span>
 <output id="value">1.00×</output></label>
 <input id="scale" type="range" min="0" max="3" step="0.05" value="1" aria-label="Translation scale">
 <div class="ends"><span>0×</span><span>3×</span></div></div>
+<div class="scale"><label class="label" for="grip-torque"><span>Grip holding torque</span>
+<output id="grip-value">0.50 N·m</output></label>
+<input id="grip-torque" type="range" min="0.1" max="2" step="0.05" value="0.5"
+aria-label="Grip holding torque">
+<div class="ends"><span>0.1 N·m</span><span>2.0 N·m</span></div>
+<div class="feedback" id="grip-feedback">Motor torque feedback available after Track.</div></div>
 <button id="kill" type="button">Kill arm</button>
 <div id="message" role="status"></div>
 </main><script>
 const button=document.getElementById('track'),slider=document.getElementById('scale');
 const record=document.getElementById('record'),kill=document.getElementById('kill');
 const home=document.getElementById('home');
-let tracking=false,recording=false,dragging=false,chain=Promise.resolve();
-function render(s){tracking=s.tracking;button.textContent=tracking?'Untrack':'Track';
-button.dataset.tracking=tracking;button.setAttribute('aria-pressed',String(tracking));
+const untrack=document.getElementById('untrack'),reject=document.getElementById('reject');
+const grip=document.getElementById('grip-torque'),indicator=document.getElementById('tracking-state');
+let tracking=false,recording=false,dragging=false,gripDragging=false,chain=Promise.resolve();
+function render(s){tracking=s.tracking;
+indicator.textContent=tracking?(s.arm_open?'TRACKED':'STARTING…'):'UNTRACKED';
+indicator.dataset.tracked=tracking&&s.arm_open;
 document.getElementById('side').textContent=(s.side==='right'?'Right':'Left')+' arm'+(s.dry_run?' · dry run':'');
 document.getElementById('hint').textContent=s.power_off?
 (s.side==='right'?'Right':'Left')+' arm: motor torque off. Track reopens this arm.':
@@ -188,21 +237,34 @@ record.dataset.recording=recording;record.setAttribute('aria-pressed',String(rec
 record.disabled=!s.arm_open||s.dry_run;kill.textContent=s.killing?'Disabling arm…':'Kill arm';
 home.textContent=s.homing?'Returning…':'Return to 0';
 home.disabled=!s.arm_open||s.homing||s.recording||s.recording_requested;
+reject.textContent=s.recording||s.recording_requested?'Reject current example':'Reject last saved example';
+reject.disabled=!(s.recording||s.recording_requested||s.saved_episodes);
+if(!gripDragging){grip.value=s.grip_torque_nm;
+document.getElementById('grip-value').textContent=Number(s.grip_torque_nm).toFixed(2)+' N·m';}
+const measured=s.grip_measured_torque_nm==null?'—':Math.abs(s.grip_measured_torque_nm).toFixed(2)+' N·m';
+const applied=s.grip_applied_torque_nm==null?'pending Track':Number(s.grip_applied_torque_nm).toFixed(2)+' N·m';
+document.getElementById('grip-feedback').textContent='Applied hold: '+applied+' · Measured motor torque: '+measured+
+(s.grip_holding?' · HOLDING':'');
 document.getElementById('message').textContent=s.recording?'Recording · '+s.frames+' frames':
-[s.message,s.recording_error?'Recording: '+s.recording_error:''].filter(Boolean).join('\\n');
+[s.message,s.recording_error?'Recording: '+s.recording_error:'',s.grip_error].filter(Boolean).join('\\n');
 if(!dragging){slider.value=s.scale;document.getElementById('value').textContent=Number(s.scale).toFixed(2)+'×';}}
 function send(values,path='/api/control'){chain=chain.catch(()=>{}).then(async()=>{
 const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify(values)});
 const s=await r.json();if(!r.ok)throw Error(s.error);render(s);
 }).catch(e=>{document.getElementById('message').textContent=e.message;});return chain;}
-button.onclick=()=>send({tracking:!tracking});
+button.onclick=()=>send({tracking:true});
+untrack.onclick=()=>send({tracking:false});
 record.onclick=()=>send({recording_requested:!recording});
+reject.onclick=()=>send({},'/api/reject');
 home.onclick=()=>send({},'/api/home');
 kill.onclick=async()=>{try{const r=await fetch('/api/kill',{method:'POST'});const s=await r.json();render(s);}
 catch(e){document.getElementById('message').textContent=e.message;}};
 slider.oninput=()=>{dragging=true;document.getElementById('value').textContent=Number(slider.value).toFixed(2)+'×';};
 slider.onchange=()=>{const scale=Number(slider.value);dragging=false;send({scale});};
+grip.oninput=()=>{gripDragging=true;
+document.getElementById('grip-value').textContent=Number(grip.value).toFixed(2)+' N·m';};
+grip.onchange=()=>{const torque=Number(grip.value);gripDragging=false;send({grip_torque_nm:torque});};
 async function poll(){try{const r=await fetch('/api/state');if(!r.ok)throw Error('Connection unavailable');
 render(await r.json());}
 catch(e){document.getElementById('message').textContent=e.message;}}

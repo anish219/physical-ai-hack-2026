@@ -67,8 +67,11 @@ class DashboardTests(unittest.TestCase):
         try:
             with urllib.request.urlopen(url) as response:
                 html = response.read().decode()
-            self.assertEqual(html.count('<button '), 4)
-            self.assertEqual(html.count('type="range"'), 1)
+            self.assertEqual(html.count('<button '), 6)
+            self.assertEqual(html.count('type="range"'), 2)
+            self.assertIn('id="tracking-state"', html)
+            self.assertIn('button.onclick=()=>send({tracking:true})', html)
+            self.assertIn('untrack.onclick=()=>send({tracking:false})', html)
             for change in ({"tracking": True}, {"scale": 1.75}, {"tracking": False}):
                 request = urllib.request.Request(url + "/api/control", data=json.dumps(change).encode(),
                                                  headers={"Content-Type": "application/json"})
@@ -122,6 +125,33 @@ class DashboardTests(unittest.TestCase):
         controls.change({"tracking": True})
         controls.report(message="")
         self.assertIn("camera wrist_l", controls.snapshot()["recording_error"])
+
+    def test_reject_routes_current_and_saved_examples_without_untracking(self):
+        for current in (True, False):
+            with self.subTest(current=current):
+                controls = Controls(1.0, "right")
+                controls.report(arm_open=True, saved_episodes=2, recording=current)
+                controls.change({"tracking": True})
+                dashboard = LeaderDashboard(controls, 0)
+                try:
+                    request = urllib.request.Request(f"http://127.0.0.1:{dashboard.port}/api/reject", data=b"")
+                    with urllib.request.urlopen(request) as response:
+                        state = json.load(response)
+                    self.assertTrue(state["tracking"])
+                    self.assertTrue(state["reject_requested"])
+                    self.assertFalse(state["recording_requested"])
+                    self.assertEqual(state["reject_kind"], "current" if current else "saved")
+                finally:
+                    dashboard.close()
+
+    def test_grip_setting_changes_effort_revision_not_pose_anchor(self):
+        controls = Controls(1.0, "right")
+        controls.change({"tracking": True})
+        before = controls.snapshot()
+        after = controls.change({"grip_torque_nm": 1.25})
+        self.assertEqual(after["grip_torque_nm"], 1.25)
+        self.assertEqual(after["grip_revision"], before["grip_revision"] + 1)
+        self.assertEqual(after["revision"], before["revision"])
 
     def test_return_endpoint_uses_home_request_and_stops_tracking(self):
         controls = Controls(1.0, "right")
