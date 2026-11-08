@@ -2,6 +2,8 @@
 
 Team demo: start with [TEAM_HANDOFF.md](TEAM_HANDOFF.md) for the live controller, orchestration map, source branches and NUC dataset backup.
 
+Independent right-arm USB worker: see [integration and test instructions](docs/right_arm_controller.md) for the headless launch contract, exact checkpoints, configurable start poses and retries.
+
 Put Dream-1, the Dream Labs robot model, to work on a pair of robot arms: run it as it is, build your own project on the Dream API, or teach it your task with demonstrations you record with a Meta Quest and fine-tune it on them (optional).
 
 Built for the [MakerMods Physical AI Hackathon](https://luma.com/pah) (November 7-8, San Francisco), presented with MakerMods and Dream Labs.

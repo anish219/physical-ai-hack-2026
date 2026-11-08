@@ -1,0 +1,28 @@
+{
+  "unplug_start": {
+    "q": [
+      0.4307408332824707,
+      -1.140049695968628,
+      -0.014853131957352161,
+      0.6018872261047363,
+      0.03727656975388527,
+      0.029418783262372017
+    ],
+    "waypoints": [],
+    "rate_rad_s": 0.3,
+    "tolerance_rad": 0.02,
+    "grip": "preserve",
+    "provenance": {
+      "method": "Observed first-frame joints with minimum summed maximum-joint distance to the 50 training episode starts (medoid, no averaged pose).",
+      "dataset": "usb-unplug-right-v1",
+      "episode": 16,
+      "frame": 0,
+      "column": "observation.state",
+      "source_sha256": "dd4083726986a740b48bf44035dc12a322f80100a9d84fdb697e69f58d257df4",
+      "source_path": "datasets/usb-unplug-training-run-1/usb-unplug-right-v1/data/chunk-000/episode_000016.parquet",
+      "recorded_gripper_mm": 1.61570143699646,
+      "physical_return_path_validated": false,
+      "original_episode": 17
+    }
+  }
+}

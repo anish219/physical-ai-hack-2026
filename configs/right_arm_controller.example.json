@@ -1,0 +1,63 @@
+{
+  "judge_approved_repeated_cycle": true,
+  "right_url": "http://127.0.0.1:8692",
+  "poll_seconds": 0.5,
+  "bindings": {
+    "pull_all": {
+      "operation": "script",
+      "argv": [
+        ".venv/bin/python",
+        "scripts/replay_usb_bundle.py",
+        "recordings/usb-bundle-pull/plan.json",
+        "--config",
+        "configs/station.yaml",
+        "--server",
+        "http://127.0.0.1:8692",
+        "--execute"
+      ]
+    },
+    "verify_usb": {
+      "operation": "http",
+      "url": "http://127.0.0.1:REPLACE/verifications/usb",
+      "method": "POST",
+      "body": {
+        "run_id": "{{variables.run_id}}",
+        "inspection_id": "{{variables.inspection_id}}",
+        "requested_at": "{{variables.requested_at}}"
+      },
+      "resultPath": "body"
+    },
+    "unplug_policy": {
+      "operation": "dream",
+      "selection": "right",
+      "checkpoint": "dream-1-ft:f9ed26ed-usb-unplug-right-500-20261107",
+      "run": true,
+      "durationSeconds": 3,
+      "task": "Using only the right arm, unplug one USB cable that starts connected to the power strip. Do not reinsert removed cables.",
+      "prepare": {
+        "pose": "unplug_start",
+        "first": true,
+        "retry_every": 1
+      }
+    },
+    "plug_usb": {
+      "operation": "dream",
+      "selection": "right",
+      "checkpoint": "dream-1-ft:f9ed26ed-usb-manip-gen-cos1000-20261108",
+      "run": true,
+      "durationSeconds": 3,
+      "task": "Pick up the USB-C cable and insert its connector into the target port using the right arm.",
+      "prepare": {
+        "pose": null,
+        "first": false,
+        "retry_every": 0
+      }
+    },
+    "return_usb_start": {
+      "operation": "pose",
+      "pose": "unplug_start",
+      "enabled": true
+    }
+  },
+  "poses_file": "configs/right_arm_start_poses.json"
+}
