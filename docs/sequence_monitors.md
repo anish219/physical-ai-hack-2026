@@ -36,6 +36,7 @@ controller starts. Restart 8081 after changing that file.
 ```python
 from dream_hackathon.monitor_scripts import register_all
 
+
 def register_all(registry):
     registry.set_prompt_evaluator(evaluate_vlm_prompt)
     registry.register_script("usb_unplugged", evaluate_usb_unplugged, label="USB unplugged")
@@ -100,14 +101,26 @@ from dream_hackathon.sequences import MonitorRegistry, validate_definition
 
 registry = MonitorRegistry()
 registry.register_script("usb_unplugged", lambda context: "yes", label="USB unplugged")
-plan = validate_definition({
-    "phases": [{
-        "id": "p", "title": "Check",
-        "steps": [{
-            "id": "s", "label": "Wait", "type": "wait", "durationSeconds": 0,
-            "monitor": {"type": "script", "prompt": "", "script": "usb_unplugged"},
-        }],
-    }]
-}, for_run=True, scripts=registry.pointers())
+plan = validate_definition(
+    {
+        "phases": [
+            {
+                "id": "p",
+                "title": "Check",
+                "steps": [
+                    {
+                        "id": "s",
+                        "label": "Wait",
+                        "type": "wait",
+                        "durationSeconds": 0,
+                        "monitor": {"type": "script", "prompt": "", "script": "usb_unplugged"},
+                    }
+                ],
+            }
+        ]
+    },
+    for_run=True,
+    scripts=registry.pointers(),
+)
 assert registry.evaluate(plan["phases"][0]["steps"][0]["monitor"], {"step": {}})["result"] == "yes"
 ```
