@@ -8,15 +8,25 @@ the window; they do not yet gate advancement. See docs/sequence_monitors.md.
 """
 
 import copy
+import importlib.util
+import inspect
 import json
 import math
 import pathlib
+import re
+import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
+from urllib.parse import urlparse
 
 
 MONITOR_TYPES = ("none", "prompt", "script")
+SEQUENCE_MODES = ("local", "http", "script")
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
+SCRIPT_FUNCTION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def identifier():
@@ -27,10 +37,98 @@ def default_monitor():
     return {"type": "none", "prompt": "", "script": ""}
 
 
+def default_http():
+    return {"mode": "local", "httpUrl": "", "scriptRef": ""}
+
+
+def parse_script_ref(ref):
+    if not isinstance(ref, str) or not ref.strip() or len(ref) > 200:
+        raise ValueError("Script refs must be a project file or function name up to 200 characters")
+    text = ref.strip()
+    if ":" in text:
+        target, function = text.rsplit(":", 1)
+        target, function = target.strip(), function.strip()
+        if not target or not SCRIPT_FUNCTION.match(function):
+            raise ValueError("Use file.py or file.py:function_name")
+        return target, function
+    return text, ""
+
+
+def project_file(path):
+    resolved = path.resolve()
+    root = PROJECT_ROOT.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ValueError("Script must live in this project") from error
+    return resolved
+
+
+def resolve_script(ref):
+    target, function = parse_script_ref(ref)
+    if target.endswith(".py") or "/" in target or target.startswith("."):
+        path = project_file(PROJECT_ROOT / target)
+    else:
+        relative = pathlib.Path(*target.split("."))
+        candidates = [
+            PROJECT_ROOT / f"{target}.py",
+            PROJECT_ROOT / relative.with_suffix(".py"),
+            PROJECT_ROOT / "src" / f"{target}.py",
+            PROJECT_ROOT / "src" / relative.with_suffix(".py"),
+            PROJECT_ROOT / "scripts" / f"{target}.py",
+        ]
+        path = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if path is None:
+            raise ValueError(f"No project script matching {target}")
+        path = project_file(path)
+    if path.suffix != ".py" or not path.is_file():
+        raise ValueError("Choose a .py file in this project")
+    return path, function
+
+
+def load_script(ref):
+    path, function = resolve_script(ref)
+    name = "dream_hackathon_match_" + "_".join(path.relative_to(PROJECT_ROOT.resolve()).with_suffix("").parts)
+    sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    names = (function,) if function else ("start", "run", "main")
+    for candidate in names:
+        loaded = getattr(module, candidate, None)
+        if callable(loaded):
+            return module, loaded, candidate
+    if function:
+        raise ValueError(f"No function {function} in {path.relative_to(PROJECT_ROOT.resolve())}")
+    raise ValueError(f"{path.relative_to(PROJECT_ROOT.resolve())} needs a start, run, or main function")
+
+
+def invoke_script(fn, context):
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(context)
+    if not parameters:
+        return fn()
+    return fn(context)
+
+
+def validate_http_url(url):
+    if not isinstance(url, str) or len(url) > 500:
+        raise ValueError("HTTP start links must be text up to 500 characters")
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("HTTP start links must be an http or https URL")
+    return url.strip()
+
+
 def default_definitions():
     return {
-        "left": {"phases": []},
+        "left": {**default_http(), "phases": []},
         "right": {
+            **default_http(),
             "phases": [
                 {
                     "id": identifier(),
@@ -49,7 +147,7 @@ def default_definitions():
                 }
             ]
         },
-        "both": {"phases": []},
+        "both": {**default_http(), "phases": []},
     }
 
 
@@ -81,6 +179,29 @@ def validate_definition(value, *, for_run=False, scripts=()):
     if not isinstance(value, dict) or not isinstance(value.get("phases"), list):
         raise ValueError("A sequence needs an ordered phases list")
     definition = copy.deepcopy(value)
+    mode = definition.get("mode") or "local"
+    if mode not in SEQUENCE_MODES:
+        raise ValueError("Sequence mode must be local, http, or script")
+    url = definition.get("httpUrl") or ""
+    if not isinstance(url, str) or len(url) > 500:
+        raise ValueError("HTTP start links must be text up to 500 characters")
+    if mode == "http":
+        if for_run or url.strip():
+            url = validate_http_url(url)
+    ref = definition.get("scriptRef") or ""
+    if not isinstance(ref, str) or len(ref) > 200:
+        raise ValueError("Script refs must be a project file or function name up to 200 characters")
+    if mode == "script":
+        if for_run or ref.strip():
+            if for_run:
+                load_script(ref.strip())
+            else:
+                target, _function = parse_script_ref(ref)
+                if target.endswith(".py") or "/" in target or target.startswith("."):
+                    project_file(PROJECT_ROOT / target)
+    definition["mode"] = mode
+    definition["httpUrl"] = url.strip()
+    definition["scriptRef"] = ref.strip()
     for phase in definition["phases"]:
         if not isinstance(phase, dict) or not isinstance(phase.get("steps"), list):
             raise ValueError("Each phase needs a subphase list")
@@ -108,7 +229,7 @@ def validate_definition(value, *, for_run=False, scripts=()):
                     raise ValueError("Enter a prompt for every Dream subphase")
             validate_monitor(step, for_run=for_run, scripts=scripts)
             step.pop("state", None)
-    if for_run and not any(phase["steps"] for phase in definition["phases"]):
+    if for_run and mode == "local" and not any(phase["steps"] for phase in definition["phases"]):
         raise ValueError("Add at least one subphase before running the sequence")
     return definition
 
@@ -290,8 +411,54 @@ class SequenceRun:
         self.report(monitor_result=result)
         return result
 
+    def notify_http(self, definition, event):
+        payload = json.dumps({"event": event, "selection": self.selection}).encode()
+        request = urllib.request.Request(
+            definition["httpUrl"],
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            response.read()
+
+    def run_script(self, definition, cancel):
+        module, start_fn, name = load_script(definition["scriptRef"])
+        self.report(phase_title="Script", step_label=f"{definition['scriptRef']} · {name}", durationSeconds=0)
+        context = {
+            "event": "start",
+            "selection": self.selection,
+            "sides": self.sides,
+            "cancel": cancel,
+            "nodes": self.nodes,
+        }
+        result = invoke_script(start_fn, context)
+        while not cancel.is_set():
+            cancel.wait(0.25)
+        stop_fn = getattr(result, "stop", None) if result is not None else None
+        if not callable(stop_fn):
+            stop_fn = getattr(module, "stop", None)
+        if callable(stop_fn):
+            try:
+                invoke_script(stop_fn, {**context, "event": "stop"})
+            except Exception:
+                pass
+
     def run(self, definition, cancel):
         try:
+            if definition.get("mode") == "http":
+                self.report(phase_title="HTTP start", step_label=definition.get("httpUrl", ""), durationSeconds=0)
+                self.notify_http(definition, "start")
+                while not cancel.is_set():
+                    cancel.wait(0.25)
+                try:
+                    self.notify_http(definition, "stop")
+                except OSError:
+                    pass
+                return
+            if definition.get("mode") == "script":
+                self.run_script(definition, cancel)
+                return
             for phase_index, phase in enumerate(definition["phases"]):
                 for step_index, step in enumerate(phase["steps"]):
                     if cancel.is_set():
@@ -378,6 +545,23 @@ class SequenceManager:
         with self.lock:
             definition = copy.deepcopy(self.definitions[selection])
         self.runs[selection].start(validate_definition(definition, for_run=True, scripts=self.monitors.pointers()))
+
+    def has_work(self, selection):
+        with self.lock:
+            definition = self.definitions[selection]
+        if definition.get("mode") == "http":
+            return bool((definition.get("httpUrl") or "").strip())
+        if definition.get("mode") == "script":
+            return bool((definition.get("scriptRef") or "").strip())
+        return any(phase.get("steps") for phase in definition.get("phases", []))
+
+    def start_match(self):
+        started = [selection for selection in ("left", "right") if self.has_work(selection)]
+        if not started:
+            raise ValueError("Set a local sequence, an HTTP start link, or a project script on left or right")
+        for selection in started:
+            self.start(selection)
+        return started
 
     def stop_sides(self, sides):
         for run in self.runs.values():

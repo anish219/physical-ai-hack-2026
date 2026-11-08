@@ -1,5 +1,5 @@
 
-.system-tabs{display:flex;gap:8px;margin-bottom:18px}.system-tabs [aria-selected=true]{background:#b5f2cb;color:#10281a}
+.system-tabs{display:flex;gap:6px;margin-bottom:10px}.system-tabs button{padding:5px 10px;font-size:12px}.system-tabs [aria-selected=true]{background:#b5f2cb;color:#10281a}
 body.flow-mode{overflow:hidden}#flow-tab{position:fixed;inset:0;z-index:20;background:#10171b;display:flex;flex-direction:column}
 .flow-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:8px 10px;background:#1a2228;border-bottom:1px solid #34414a;flex-shrink:0}.flow-toolbar strong{font-size:13px;margin:0 10px 0 4px}.flow-toolbar button,.flow-toolbar select{font-size:11px;padding:6px 9px;border-radius:6px;width:auto;white-space:nowrap}.flow-toolbar #flow-run-status{font-size:11px;color:#b5f2cb;margin-left:auto}.flow-toolbar #flow-zoom-label{font-size:11px;min-width:30px;text-align:center}
 .flow-statusbar{display:flex;gap:18px;align-items:center;padding:5px 12px;font-size:10px;color:#a5afb8;background:#141c22;flex-shrink:0}.flow-statusbar span:last-child{margin-left:auto}

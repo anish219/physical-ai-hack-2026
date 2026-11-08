@@ -221,16 +221,26 @@ def test_page_contains_every_existing_leader_control_and_routes_to_selected_chil
             "api-left-panel",
             "api-right-panel",
             "api-both-panel",
-            "both-input-dream",
-            "both-input-auto",
+            "match-start",
+            "match-timer",
             "left-input-sequence",
             "right-input-sequence",
-            "both-input-sequence",
+            "left-input-http",
+            "right-input-http",
+            "left-input-script",
+            "right-input-script",
             "sequence-left-panel",
             "sequence-right-panel",
             "sequence-both-panel",
+            "http-left-panel",
+            "http-right-panel",
+            "script-left-panel",
+            "script-right-panel",
         ):
             assert f'id="{control}"'.encode() in html
+        assert b'id="both-input-dream"' not in html
+        assert b'id="both-input-sequence"' not in html
+        assert b"HTTP start" in html
         assert b'id="so101-panel" hidden' in html
         assert b'id="api-panel-template"' in html
         assert request(base, "/controller.js")[0] == 200

@@ -238,6 +238,8 @@ class UnifiedController:
         }
         self.sequences = SequenceManager(self.callers, nodes, self.publish, sequence_path)
         self.flows = FlowManager(self.callers, nodes, self.publish, flow_path)
+        self.match_started_at = None
+        self.match_stopped_at = None
 
     def shared_state(self):
         with self.shared_lock:
@@ -283,6 +285,8 @@ class UnifiedController:
         state["sequences"] = self.sequences.snapshot()
         state["flows"] = self.flows.snapshot()
         state["monitor_scripts"] = self.sequences.monitors.available_scripts()
+        state["match_started_at"] = self.match_started_at
+        state["match_stopped_at"] = self.match_stopped_at
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
             state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]
@@ -307,8 +311,8 @@ class UnifiedController:
                 self.nodes[side].control.post("/stop", {})
 
     def select_input(self, side, source):
-        if side not in self.nodes or source not in (None, "so101", "star", "dream", "sequence", "auto"):
-            raise ValueError("Choose SO-101, Star arm, Dream API, Sequences, Full Auto, or no input")
+        if side not in self.nodes or source not in (None, "so101", "star", "dream", "sequence", "http", "script", "auto"):
+            raise ValueError("Choose SO-101, Star arm, Dream API, Sequences, HTTP start, Script, Full Auto, or no input")
         with self.input_lock:
             if self.combined_input is not None:
                 self.pause(list(self.nodes))
@@ -331,6 +335,12 @@ class UnifiedController:
                     self.inputs[previous] = None
                 leader.select(side)
             self.inputs[side] = source
+            if source in ("http", "sequence", "script"):
+                definition = copy.deepcopy(self.sequences.snapshot()[side]["definition"])
+                mode = {"http": "http", "script": "script", "sequence": "local"}[source]
+                if definition.get("mode") != mode:
+                    definition["mode"] = mode
+                    self.sequences.update(side, definition)
             self.publish_selection()
             return self.state()
 
@@ -430,6 +440,24 @@ class UnifiedController:
                 self.sequences.start(selection)
             else:
                 raise ValueError("Unknown sequence action")
+
+    def match_start(self):
+        with self.input_lock:
+            for selection in ("left", "right"):
+                if self.sequences.runs[selection].snapshot()["busy"]:
+                    raise ValueError("A sequence is already running")
+            self.pause(("left", "right"))
+            self.sequences.start_match()
+            self.match_started_at = time.time()
+            self.match_stopped_at = None
+            return self.state()
+
+    def match_stop(self):
+        with self.input_lock:
+            self.sequences.stop_sides(("left", "right"))
+            if self.match_started_at is not None and self.match_stopped_at is None:
+                self.match_stopped_at = time.time()
+            return self.state()
 
     def flow_action(self, selection, action, body):
         if selection not in self.flows.runs:
@@ -605,6 +633,10 @@ class UnifiedPage:
                             self.reply(200, json.dumps(event).encode())
                             return
                         controller.dream_action(parts[2], parts[3], body)
+                    elif self.path == "/api/match/start":
+                        controller.match_start()
+                    elif self.path == "/api/match/stop":
+                        controller.match_stop()
                     elif self.path.startswith("/api/sequences/"):
                         parts = self.path.strip("/").split("/")
                         if len(parts) != 4:

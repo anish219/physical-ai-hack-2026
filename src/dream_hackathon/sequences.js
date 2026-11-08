@@ -93,6 +93,9 @@
     if (saving[selection] || pending[selection] || !latest[selection]) return;
     const previous = definitions[selection];
     definitions[selection] = clone(latest[selection].definition);
+    if (!definitions[selection].mode) definitions[selection].mode = 'local';
+    if (definitions[selection].httpUrl == null) definitions[selection].httpUrl = '';
+    if (definitions[selection].scriptRef == null) definitions[selection].scriptRef = '';
     redraw(selection, forceMarkup ? null : previous);
   }
 
@@ -103,6 +106,7 @@
     saving[selection] = (async () => {
       while (pending[selection]) {
         const definition = pending[selection]; pending[selection] = null;
+        definition.mode = 'local';
         element(selection, 'saved').textContent = 'Saving shared sequence…';
         const response = await fetch('/api/sequences/' + selection + '/save', {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({definition})
@@ -126,7 +130,7 @@
     }
     element(selection, 'title').textContent = 'Sequences · ' +
       (selection === 'both' ? 'Both arms' : selection === 'left' ? 'Left arm' : 'Right arm');
-    definitions[selection] = {phases: []}; revisions[selection] = -1;
+    definitions[selection] = {mode: 'local', httpUrl: '', scriptRef: '', phases: []}; revisions[selection] = -1;
     element(selection, 'editor').innerHTML = markup(definitions[selection]);
     element(selection, 'add-phase').onclick = () => {
       definitions[selection].phases.push({id:id(), title:'Phase ' + (definitions[selection].phases.length + 1), steps:[]});
@@ -136,7 +140,10 @@
       const monitorField = event.target.dataset.monitor;
       const field = event.target.dataset.field;
       if (monitorField === 'type' || field === 'type') return;
-      const phase = definitions[selection].phases.find(value => value.id === event.target.closest('[data-phase]').dataset.phase);
+      if (event.target.dataset.sequenceField) return;
+      const phaseNode = event.target.closest('[data-phase]');
+      if (!phaseNode) return;
+      const phase = definitions[selection].phases.find(value => value.id === phaseNode.dataset.phase);
       const stepId = event.target.closest('[data-step]')?.dataset.step;
       const target = stepId ? phase.steps.find(value => value.id === stepId) : phase;
       if (monitorField) {

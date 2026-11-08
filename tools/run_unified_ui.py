@@ -115,7 +115,7 @@ class PreviewCaller:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=18081, help="Local preview port (default 18081, not the NUC)")
+    parser.add_argument("--port", type=int, default=8082, help="Local preview port (default 8082, not the NUC)")
     args = parser.parse_args(argv)
     nodes = {"left": PreviewArm("left"), "right": PreviewArm("right")}
     callers = {side: PreviewCaller(side) for side in ("left", "right", "both")}
