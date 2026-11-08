@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Station control</title>
+<title>Station control</title><link rel="stylesheet" href="/orchestration.css">
 <style>
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#edf0f3;background:#101315}
 *{box-sizing:border-box}body{margin:0;padding:32px}main{max-width:1080px;margin:auto}
@@ -37,26 +37,30 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 @media(max-width:720px){body{padding:16px}.grid,.arm-grid{grid-template-columns:1fr}.cameras{gap:6px}.card{padding:18px}}
 </style></head><body><main>
 <header><div><span class="eyebrow">NUCK-1 · Metal arms</span><h1>Station control</h1></div><span class="badge" id="connection">Connecting</span></header>
+<nav class="system-tabs" role="tablist" aria-label="System tabs">
+<button id="tab-control" role="tab" aria-selected="true" aria-controls="control-tab">Controller</button>
+<button id="tab-flow" role="tab" aria-selected="false" aria-controls="flow-tab">Orchestration</button></nav>
+<div id="control-tab" role="tabpanel" aria-labelledby="tab-control">
 <section class="grid arm-grid" aria-label="Arms">
 <article class="card" id="left-arm"><div class="card-title"><h2>Left arm</h2><span class="badge" id="left-power-state">OFF</span></div>
 <div class="actions"><button class="power" id="left-power">Turn on</button><button id="left-home">Return to 0</button><button id="left-zero">Set 0</button></div>
 <p class="zero-note" id="left-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="left-input-dream" aria-pressed="false">Dream API</button><button id="left-input-so101" aria-pressed="false">SO-101</button>
 <button id="left-input-sequence" aria-pressed="false">Sequences</button>
-<button id="left-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
+<button id="left-input-auto" aria-pressed="false">Full Auto Control</button></div>
 <label for="left-grip-torque">Gripper holding torque <output id="left-grip-value">—</output></label>
 <input id="left-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
 <div class="feedback" id="left-grip-feedback"></div><p class="status" id="left-status"></p></article>
 <article class="card both-card" id="both-arms"><h2>Both arms</h2><div class="inputs">
 <button id="both-input-dream" aria-pressed="false">Dream API</button>
 <button id="both-input-sequence" aria-pressed="false">Sequences</button>
-<button id="both-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div></article>
+<button id="both-input-auto" aria-pressed="false">Full Auto Control</button></div></article>
 <article class="card" id="right-arm"><div class="card-title"><h2>Right arm</h2><span class="badge" id="right-power-state">OFF</span></div>
 <div class="actions"><button class="power" id="right-power">Turn on</button><button id="right-home">Return to 0</button><button id="right-zero">Set 0</button></div>
 <p class="zero-note" id="right-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="right-input-dream" aria-pressed="false">Dream API</button><button id="right-input-so101" aria-pressed="false">SO-101</button>
 <button id="right-input-sequence" aria-pressed="false">Sequences</button>
-<button id="right-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
+<button id="right-input-auto" aria-pressed="false">Full Auto Control</button></div>
 <label for="right-grip-torque">Gripper holding torque <output id="right-grip-value">—</output></label>
 <input id="right-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
 <div class="feedback" id="right-grip-feedback"></div><p class="status" id="right-status"></p></article>
@@ -80,7 +84,29 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <article class="card" id="sequence-left-panel" hidden></article>
 <article class="card" id="sequence-right-panel" hidden></article>
 <article class="card" id="sequence-both-panel" hidden></article>
+<article class="card" id="auto-left-panel" hidden></article>
+<article class="card" id="auto-right-panel" hidden></article>
+<article class="card" id="auto-both-panel" hidden></article>
+</section></div>
+<section id="flow-tab" role="tabpanel" aria-labelledby="tab-flow" hidden>
+<div class="card flow-header"><div><p class="panel-label">Full Auto · flow editor</p><h2>Orchestration</h2></div>
+<label>Flow<select id="flow-selection"><option value="both">Both arms</option><option value="left">Left arm</option><option value="right">Right arm</option></select></label>
+<div class="actions"><button id="flow-save">Save flow</button><button id="flow-reload">Load saved</button><button id="flow-export">Export</button><button id="flow-import">Import</button></div>
+<input id="flow-import-file" type="file" accept="application/json,.json" hidden>
+<p id="flow-save-status" role="status">Saved flow</p></div>
+<div class="flow-tools"><span>Add block</span><button data-add-block="trigger">Trigger</button><button data-add-block="action">Operation</button><button data-add-block="condition">Condition</button><button data-add-block="loop">Loop</button><button data-add-block="fork">Parallel</button><button data-add-block="join">Join</button><button data-add-block="end">End</button><button data-add-block="start">Go</button><button id="flow-example">Loop example</button></div>
+<div class="flow-help"><span id="flow-connect-hint">Connect an output port to an input port. Drag block headers to arrange.</span><div><button id="flow-zoom-out" aria-label="Zoom out">−</button><span id="flow-zoom-label">100%</span><button id="flow-zoom-in" aria-label="Zoom in">+</button></div></div>
+<div class="flow-workspace"><div id="flow-viewport" tabindex="0" aria-label="Flow chart canvas"><div id="flow-canvas"><svg id="flow-edges" aria-label="Flow connections"></svg><div id="flow-nodes"></div></div></div>
+<aside class="card" id="flow-inspector"><h3>Block settings</h3><p>Select a block or connection.</p></aside></div>
+<div class="card flow-runtime"><h3>Live run</h3><p id="flow-run-status">Idle · Go / Stop is on the Controller tab under Full Auto.</p>
+<details><summary>Signals, operation results and variables</summary><pre id="flow-context"></pre></details>
+<div class="flow-signal"><label>Input signal name<input id="flow-signal-name" type="text" placeholder="usb_pass or vlm_usb"></label><label>JSON value<textarea id="flow-signal-value" rows="2">true</textarea></label><button id="flow-signal-send">Send input</button></div>
+<p>Inputs are scoped to this run and reset on Go. External verifiers can POST to <code>/api/flows/{left|right|both}/signal</code>.</p></div>
 </section><p class="error" id="message" role="status"></p>
+<template id="auto-panel-template"><p class="panel-label">Full Auto input</p><h2 data-auto-field="title"></h2>
+<p>Runs the saved flow. Configure triggers and operations in the Orchestration tab. Edits apply on the next Go.</p>
+<div class="actions"><button data-auto-field="go">Go</button><button data-auto-field="stop">Stop</button><button data-auto-field="edit">Edit flow</button></div>
+<p data-auto-field="status">Idle</p><p class="error" data-auto-field="error"></p></template>
 <template id="api-panel-template">
 <p class="panel-label">Model input</p><h2 data-field="title"></h2>
 <label data-for="task">Task</label><textarea data-field="task" rows="3" placeholder="Put the cube in the bowl"></textarea>
@@ -100,4 +126,4 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <button data-sequence-field="add-phase">+ Add phase</button>
 <p class="feedback" data-sequence-field="saved">Shared sequence</p><p class="error" data-sequence-field="error"></p>
 </template>
-</main><script src="/controller.js"></script><script src="/sequences.js"></script></body></html>
+</main><script src="/controller.js"></script><script src="/sequences.js"></script><script src="/orchestration.js"></script></body></html>

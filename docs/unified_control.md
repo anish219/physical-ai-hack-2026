@@ -1,5 +1,9 @@
 # Unified station controller
 
+Full Auto now opens run controls on the Controller tab and uses the separate
+[Orchestration flow editor](orchestration.md) for configurable triggers, script/API
+operations, branches, parallel work, and loops.
+
 The unified page is served on NUCK-1 at port **8081**. The existing SSH tunnel
 continues to work: [open the page](http://localhost:8081/).
 

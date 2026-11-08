@@ -516,6 +516,7 @@ def test_shared_api_drafts_stream_to_two_clients_and_run_uses_latest_text():
         ):
             assert event(first)["type"] == event(second)["type"] == "drafts"
             assert event(first)["type"] == event(second)["type"] == "sequences"
+            assert event(first)["type"] == event(second)["type"] == "flows"
             code, payload, _ = request(base, "/api/dream/left/draft", {"task": "pick u", "client_id": "one"})
             assert code == 200
             first_event, second_event = event(first), event(second)
@@ -566,6 +567,8 @@ def test_both_selection_is_exclusive_and_never_accepts_so101():
     controller.select_both("dream")
     controller.select_both(None)
     assert controller.combined_input is None and not any(controller.inputs.values())
-    for source in ("so101", "auto"):
+    controller.select_both("auto")
+    assert controller.combined_input == "auto"
+    for source in ("so101",):
         with pytest.raises(ValueError, match="Both supports"):
             controller.select_both(source)
