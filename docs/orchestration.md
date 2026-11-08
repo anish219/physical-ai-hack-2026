@@ -1,14 +1,18 @@
 # Full Auto orchestration
 
-The **Orchestration** tab edits Left, Right, and Both-arm flow graphs. The main
+The **Orchestration** tab edits one shared flow graph. Each operation chooses its
+own target arms. The full-window canvas has a compact toolbar and a sidebar that
+opens when a block is selected; there is no graph-side selector or bottom Live run
+section. See the [current competition strategy and binding handoff](demo_strategy.md).
+The main
 **Controller** tab controls execution: select **Full Auto Control**, then use its
 **Go**, **Stop**, and **Edit flow** panel. Selecting Full Auto does not start the
-graph or power an arm. Left and Right flows can run independently; a Both flow
-can fork into parallel operations.
+graph or power an arm. Parallel blocks run independent Left and Right operations.
 
 Launch the existing `dream_hackathon.unified_control` entry point with your usual
 station configuration and leader port. The new `--flow-file` option defaults to
-`~/.cache/dream_hackathon/flows.json`. All three graphs persist there. Connected
+`~/.cache/dream_hackathon/flows.json`. The shared map uses the `both` API selection;
+legacy Left/Right API endpoints remain compatible. Connected
 browsers receive shared definitions and execution updates. A running flow uses
 a snapshot: edits apply on the next Go. Unsaved edits are saved before Go.
 Concurrent edit conflicts retain the local draft and offer **Load saved**.
@@ -21,8 +25,8 @@ D:/PERSONAL_PROJECTS/MakerModsHackathon/.venv/Scripts/python.exe scripts/preview
 ```
 
 The preview has simulated arm status, the real scheduler, and script/HTTP
-operations. It has no Dream arm workers. Its loop example only emits a local
-signal and needs no external services.
+operations. It has no Dream arm workers. The competition map starts with explicit
+dummy bindings, which do not move hardware or claim successful observations.
 
 ## Editing
 
@@ -31,7 +35,7 @@ output port and then an input port to connect them. Click a connection to delete
 it; Escape cancels a pending connection. Click a block to edit its settings.
 **Configuration JSON** supports nested trigger expressions and operation options.
 **Export/Import** transfers a graph as JSON. **Load saved** discards unsaved edits.
-**Loop example** replaces the draft with a three-iteration graph. Neither saving
+**Demo strategy** replaces the draft with the team's current competition map. Neither saving
 nor loading a graph starts it.
 
 | Block | Behavior / outputs |
@@ -156,7 +160,7 @@ does not prove a three-second interval.
 | `POST /api/flows/{selection}/signal` | `{"name":"usb_vision","value":{"verdict":"yes"}}` |
 | `GET /api/events` | Existing stream includes `type:"flows"` updates |
 
-The signal form below the canvas uses that same endpoint. Graph nodes contain
+Automatic external verifiers can send inputs using the signal endpoint. Graph nodes contain
 `id`, `type`, `label`, `x`, `y`, `config`; edges contain `id`, `source`, `port`,
 `target`. Structure/configuration is validated before execution. Existing source
 handoff applies: selecting another input, Return to 0, or explicit arm power-off

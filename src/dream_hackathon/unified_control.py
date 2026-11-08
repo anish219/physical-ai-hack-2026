@@ -463,6 +463,10 @@ class UnifiedPage:
                     )
                 elif self.path == "/api/state":
                     self.reply(200, json.dumps(controller.state()).encode())
+                elif self.path == "/api/flow-strategy":
+                    from dream_hackathon.demo_strategy import competition_graph
+
+                    self.reply(200, json.dumps(competition_graph()).encode())
                 elif self.path == "/api/events":
                     listener = queue.Queue()
                     with controller.shared_lock:

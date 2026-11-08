@@ -1,0 +1,878 @@
+{
+  "version": 2,
+  "name": "Tower height + repeating USB cycle",
+  "variables": {
+    "maxBlocks": 7,
+    "lateAtSeconds": 240,
+    "lateHoldAbove": 5,
+    "runSeconds": 300,
+    "pollSeconds": 0.5
+  },
+  "notes": [
+    "Team reports judges approved repeated insert/release/unplug/table/release scoring.",
+    "Written rubric v4 forbids replugging unplugged cables; team ruling takes precedence in this map.",
+    "Bindings are explicit dummies until recordings, policies, and verifiers are supplied.",
+    "No balls. Stacking starts only after a known first unplug. Collapse always returns to rebuilding."
+  ],
+  "bindings": {
+    "pull_all": {
+      "operation": "dummy",
+      "note": "TODO record the pull-all-cables episode",
+      "result": {},
+      "replaceWith": {
+        "operation": "episode",
+        "planPath": "TODO/pull-all.plan.json"
+      }
+    },
+    "plug_usb": {
+      "operation": "dummy",
+      "note": "TODO record insertion, including releasing the gripper",
+      "result": {},
+      "replaceWith": {
+        "operation": "episode",
+        "planPath": "TODO/plug-usb.plan.json"
+      }
+    },
+    "return_usb_start": {
+      "operation": "dummy",
+      "note": "TODO record returning to the unplug-policy start pose",
+      "result": {},
+      "replaceWith": {
+        "operation": "episode",
+        "planPath": "TODO/return-usb-start.plan.json"
+      }
+    },
+    "unplug_policy": {
+      "operation": "dummy",
+      "note": "TODO bind trained unplug policy; one action window per verification attempt",
+      "result": {},
+      "replaceWith": {
+        "operation": "dream",
+        "checkpoint": "TODO/unplug-checkpoint",
+        "run": true,
+        "durationSeconds": 3,
+        "task": "Unplug a cable from the hub, put it on the table, and let go."
+      }
+    },
+    "stack_next": {
+      "operation": "dummy",
+      "note": "TODO bind trained stacking policy",
+      "result": {},
+      "replaceWith": {
+        "operation": "dream",
+        "checkpoint": "TODO/stack-checkpoint",
+        "run": true,
+        "durationSeconds": 3,
+        "task": "Add one block to the existing tower, release it, and clear the tower."
+      }
+    },
+    "rebuild": {
+      "operation": "dummy",
+      "note": "TODO bind restacking policy; no reset of the global match clock",
+      "result": {},
+      "replaceWith": {
+        "operation": "dream",
+        "checkpoint": "TODO/stack-checkpoint",
+        "run": true,
+        "durationSeconds": 3,
+        "task": "The tower fell. Collect a fallen block and rebuild a stable base. Release it."
+      }
+    },
+    "verify_usb": {
+      "operation": "dummy",
+      "note": "TODO connect automatic scene verification; unknown never passes a gate",
+      "result": {
+        "known": false,
+        "unplugged_count": 0,
+        "plugged_count": 4,
+        "gripper_released": false,
+        "cable_on_table": false,
+        "fully_inserted": false
+      },
+      "replaceWith": {
+        "operation": "vlm",
+        "provider": "openai",
+        "model": "TODO/vision-model",
+        "imageUrl": "http://127.0.0.1:8081/api/camera/overhead.jpg",
+        "question": "Inspect all four hub ports. plugged_count is occupied ports. unplugged_count is 4 minus occupied ports; do not count unrelated loose cables. Mark known=false when a port is obscured. Is a cable fully inserted? Is the gripper released? Is the unplugged cable resting on the table?",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "known": {
+              "type": "boolean"
+            },
+            "unplugged_count": {
+              "type": "integer"
+            },
+            "plugged_count": {
+              "type": "integer"
+            },
+            "gripper_released": {
+              "type": "boolean"
+            },
+            "cable_on_table": {
+              "type": "boolean"
+            },
+            "fully_inserted": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "known",
+            "unplugged_count",
+            "plugged_count",
+            "gripper_released",
+            "cable_on_table",
+            "fully_inserted"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "verify_tower": {
+      "operation": "dummy",
+      "note": "TODO connect automatic scene verification; unknown never passes a gate",
+      "result": {
+        "known": false,
+        "block_count": 0,
+        "collapsed": false,
+        "standing_free": false
+      },
+      "replaceWith": {
+        "operation": "vlm",
+        "provider": "openai",
+        "model": "TODO/vision-model",
+        "imageUrl": "http://127.0.0.1:8081/api/camera/overhead.jpg",
+        "question": "Count blocks in the standing tower. Has the tower collapsed? Is it free standing with the gripper clear?",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "known": {
+              "type": "boolean"
+            },
+            "block_count": {
+              "type": "integer"
+            },
+            "collapsed": {
+              "type": "boolean"
+            },
+            "standing_free": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "known",
+            "block_count",
+            "collapsed",
+            "standing_free"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "groups": [
+    {
+      "label": "First cable: recorded attempt + verification",
+      "x": 30,
+      "y": 15,
+      "width": 1810,
+      "height": 230
+    },
+    {
+      "label": "Left arm: build height / restack on collapse",
+      "x": 30,
+      "y": 360,
+      "width": 1190,
+      "height": 760
+    },
+    {
+      "label": "Right arm: clear hub / repeat scoring cycle",
+      "x": 1230,
+      "y": 360,
+      "width": 1500,
+      "height": 1210
+    },
+    {
+      "label": "Five-minute match clock",
+      "x": 2130,
+      "y": 15,
+      "width": 900,
+      "height": 230
+    }
+  ],
+  "nodes": [
+    {
+      "id": "go",
+      "type": "start",
+      "label": "Go \u00b7 five-minute match",
+      "x": 60,
+      "y": 60,
+      "config": {}
+    },
+    {
+      "id": "match_clock",
+      "type": "fork",
+      "label": "Start match clock + cable work",
+      "x": 360,
+      "y": 60,
+      "config": {}
+    },
+    {
+      "id": "pull_all",
+      "type": "action",
+      "label": "Recorded pull-all attempt",
+      "x": 660,
+      "y": 60,
+      "config": {
+        "operation": "binding",
+        "binding": "pull_all",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "first_usb_view",
+      "type": "action",
+      "label": "Verify any cable unplugged",
+      "x": 960,
+      "y": 60,
+      "config": {
+        "operation": "binding",
+        "binding": "verify_usb",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "first_usb_gate",
+      "type": "condition",
+      "label": "Known removal \u2265 1?",
+      "x": 1260,
+      "y": 60,
+      "config": {
+        "condition": {
+          "kind": "all",
+          "conditions": [
+            {
+              "kind": "result",
+              "name": "first_usb_view",
+              "path": "known",
+              "op": "eq",
+              "value": true
+            },
+            {
+              "kind": "result",
+              "name": "first_usb_view",
+              "path": "unplugged_count",
+              "op": "gte",
+              "value": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "start_stack_and_clear",
+      "type": "fork",
+      "label": "USB gate passed \u00b7 both jobs",
+      "x": 1560,
+      "y": 60,
+      "config": {}
+    },
+    {
+      "id": "deadline",
+      "type": "trigger",
+      "label": "At 5:00 from Go",
+      "x": 2160,
+      "y": 60,
+      "config": {
+        "condition": {
+          "kind": "elapsed",
+          "secondsRef": "variables.runSeconds"
+        }
+      }
+    },
+    {
+      "id": "finish",
+      "type": "action",
+      "label": "End match \u00b7 finish both arms",
+      "x": 2460,
+      "y": 60,
+      "config": {
+        "operation": "finish",
+        "selection": "both"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "label": "Match complete",
+      "x": 2760,
+      "y": 60,
+      "config": {}
+    },
+    {
+      "id": "tower_view",
+      "type": "action",
+      "label": "Inspect tower / watch for collapse",
+      "x": 60,
+      "y": 420,
+      "config": {
+        "operation": "binding",
+        "binding": "verify_tower",
+        "selection": "left"
+      }
+    },
+    {
+      "id": "tower_known",
+      "type": "condition",
+      "label": "Tower state known?",
+      "x": 360,
+      "y": 420,
+      "config": {
+        "condition": {
+          "kind": "result",
+          "name": "tower_view",
+          "path": "known",
+          "op": "eq",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": "tower_fell",
+      "type": "condition",
+      "label": "Tower fell?",
+      "x": 660,
+      "y": 420,
+      "config": {
+        "condition": {
+          "kind": "result",
+          "name": "tower_view",
+          "path": "collapsed",
+          "op": "eq",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": "rebuild",
+      "type": "action",
+      "label": "Recover fallen blocks \u00b7 rebuild base",
+      "x": 960,
+      "y": 420,
+      "config": {
+        "operation": "binding",
+        "binding": "rebuild",
+        "selection": "left"
+      }
+    },
+    {
+      "id": "tower_cap",
+      "type": "condition",
+      "label": "At editable height cap?",
+      "x": 660,
+      "y": 660,
+      "config": {
+        "condition": {
+          "kind": "result",
+          "name": "tower_view",
+          "path": "block_count",
+          "op": "gte",
+          "valueRef": "variables.maxBlocks"
+        }
+      }
+    },
+    {
+      "id": "late_hold",
+      "type": "condition",
+      "label": "After 4:00 AND more than 5?",
+      "x": 660,
+      "y": 900,
+      "config": {
+        "condition": {
+          "kind": "all",
+          "conditions": [
+            {
+              "kind": "elapsed",
+              "secondsRef": "variables.lateAtSeconds"
+            },
+            {
+              "kind": "result",
+              "name": "tower_view",
+              "path": "block_count",
+              "op": "gt",
+              "valueRef": "variables.lateHoldAbove"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "stack_next",
+      "type": "action",
+      "label": "Place next block \u00b7 release",
+      "x": 960,
+      "y": 900,
+      "config": {
+        "operation": "binding",
+        "binding": "stack_next",
+        "selection": "left"
+      }
+    },
+    {
+      "id": "watch_tower",
+      "type": "trigger",
+      "label": "Hold left \u00b7 keep checking tower",
+      "x": 360,
+      "y": 900,
+      "config": {
+        "condition": {
+          "kind": "delay",
+          "secondsRef": "variables.pollSeconds"
+        }
+      }
+    },
+    {
+      "id": "clear_view",
+      "type": "action",
+      "label": "Inspect original hub cables",
+      "x": 1260,
+      "y": 420,
+      "config": {
+        "operation": "binding",
+        "binding": "verify_usb",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "clear_known",
+      "type": "condition",
+      "label": "Hub state known?",
+      "x": 1560,
+      "y": 420,
+      "config": {
+        "condition": {
+          "kind": "result",
+          "name": "clear_view",
+          "path": "known",
+          "op": "eq",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": "all_clear",
+      "type": "condition",
+      "label": "All four original USBs out?",
+      "x": 1860,
+      "y": 420,
+      "config": {
+        "condition": {
+          "kind": "result",
+          "name": "clear_view",
+          "path": "unplugged_count",
+          "op": "gte",
+          "value": 4
+        }
+      }
+    },
+    {
+      "id": "clear_policy",
+      "type": "action",
+      "label": "Trained unplug policy \u00b7 clear hub",
+      "x": 1560,
+      "y": 660,
+      "config": {
+        "operation": "binding",
+        "binding": "unplug_policy",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "clear_wait",
+      "type": "trigger",
+      "label": "Wait for next hub inspection",
+      "x": 1260,
+      "y": 660,
+      "config": {
+        "condition": {
+          "kind": "delay",
+          "secondsRef": "variables.pollSeconds"
+        }
+      }
+    },
+    {
+      "id": "plug_attempt",
+      "type": "action",
+      "label": "Attempt USB insertion \u00b7 let go",
+      "x": 1860,
+      "y": 900,
+      "config": {
+        "operation": "binding",
+        "binding": "plug_usb",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "plug_view",
+      "type": "action",
+      "label": "Verify insertion + released gripper",
+      "x": 2160,
+      "y": 900,
+      "config": {
+        "operation": "binding",
+        "binding": "verify_usb",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "plug_success",
+      "type": "condition",
+      "label": "Fully plugged AND released?",
+      "x": 2460,
+      "y": 900,
+      "config": {
+        "condition": {
+          "kind": "all",
+          "conditions": [
+            {
+              "kind": "result",
+              "name": "plug_view",
+              "path": "known",
+              "op": "eq",
+              "value": true
+            },
+            {
+              "kind": "result",
+              "name": "plug_view",
+              "path": "fully_inserted",
+              "op": "eq",
+              "value": true
+            },
+            {
+              "kind": "result",
+              "name": "plug_view",
+              "path": "gripper_released",
+              "op": "eq",
+              "value": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "return_start",
+      "type": "action",
+      "label": "Return to unplug start pose",
+      "x": 2460,
+      "y": 1140,
+      "config": {
+        "operation": "binding",
+        "binding": "return_usb_start",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "cycle_unplug",
+      "type": "action",
+      "label": "Unplug API \u00b7 set on table \u00b7 let go",
+      "x": 2160,
+      "y": 1380,
+      "config": {
+        "operation": "binding",
+        "binding": "unplug_policy",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "unplug_view",
+      "type": "action",
+      "label": "Verify unplugged / on table / released",
+      "x": 1860,
+      "y": 1380,
+      "config": {
+        "operation": "binding",
+        "binding": "verify_usb",
+        "selection": "right"
+      }
+    },
+    {
+      "id": "unplug_success",
+      "type": "condition",
+      "label": "Unplugged + table + release?",
+      "x": 1560,
+      "y": 1380,
+      "config": {
+        "condition": {
+          "kind": "all",
+          "conditions": [
+            {
+              "kind": "result",
+              "name": "unplug_view",
+              "path": "known",
+              "op": "eq",
+              "value": true
+            },
+            {
+              "kind": "result",
+              "name": "unplug_view",
+              "path": "plugged_count",
+              "op": "eq",
+              "value": 0
+            },
+            {
+              "kind": "result",
+              "name": "unplug_view",
+              "path": "cable_on_table",
+              "op": "eq",
+              "value": true
+            },
+            {
+              "kind": "result",
+              "name": "unplug_view",
+              "path": "gripper_released",
+              "op": "eq",
+              "value": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "go-next-match_clock",
+      "source": "go",
+      "port": "next",
+      "target": "match_clock"
+    },
+    {
+      "id": "match_clock-next-pull_all",
+      "source": "match_clock",
+      "port": "next",
+      "target": "pull_all"
+    },
+    {
+      "id": "match_clock-next-deadline",
+      "source": "match_clock",
+      "port": "next",
+      "target": "deadline"
+    },
+    {
+      "id": "pull_all-next-first_usb_view",
+      "source": "pull_all",
+      "port": "next",
+      "target": "first_usb_view"
+    },
+    {
+      "id": "first_usb_view-next-first_usb_gate",
+      "source": "first_usb_view",
+      "port": "next",
+      "target": "first_usb_gate"
+    },
+    {
+      "id": "first_usb_gate-false-pull_all",
+      "source": "first_usb_gate",
+      "port": "false",
+      "target": "pull_all"
+    },
+    {
+      "id": "first_usb_gate-true-start_stack_and_clear",
+      "source": "first_usb_gate",
+      "port": "true",
+      "target": "start_stack_and_clear"
+    },
+    {
+      "id": "start_stack_and_clear-next-tower_view",
+      "source": "start_stack_and_clear",
+      "port": "next",
+      "target": "tower_view"
+    },
+    {
+      "id": "start_stack_and_clear-next-clear_view",
+      "source": "start_stack_and_clear",
+      "port": "next",
+      "target": "clear_view"
+    },
+    {
+      "id": "deadline-next-finish",
+      "source": "deadline",
+      "port": "next",
+      "target": "finish"
+    },
+    {
+      "id": "finish-next-end",
+      "source": "finish",
+      "port": "next",
+      "target": "end"
+    },
+    {
+      "id": "tower_view-next-tower_known",
+      "source": "tower_view",
+      "port": "next",
+      "target": "tower_known"
+    },
+    {
+      "id": "tower_known-false-watch_tower",
+      "source": "tower_known",
+      "port": "false",
+      "target": "watch_tower"
+    },
+    {
+      "id": "tower_known-true-tower_fell",
+      "source": "tower_known",
+      "port": "true",
+      "target": "tower_fell"
+    },
+    {
+      "id": "tower_fell-true-rebuild",
+      "source": "tower_fell",
+      "port": "true",
+      "target": "rebuild"
+    },
+    {
+      "id": "rebuild-next-tower_view",
+      "source": "rebuild",
+      "port": "next",
+      "target": "tower_view"
+    },
+    {
+      "id": "tower_fell-false-tower_cap",
+      "source": "tower_fell",
+      "port": "false",
+      "target": "tower_cap"
+    },
+    {
+      "id": "tower_cap-true-watch_tower",
+      "source": "tower_cap",
+      "port": "true",
+      "target": "watch_tower"
+    },
+    {
+      "id": "tower_cap-false-late_hold",
+      "source": "tower_cap",
+      "port": "false",
+      "target": "late_hold"
+    },
+    {
+      "id": "late_hold-true-watch_tower",
+      "source": "late_hold",
+      "port": "true",
+      "target": "watch_tower"
+    },
+    {
+      "id": "late_hold-false-stack_next",
+      "source": "late_hold",
+      "port": "false",
+      "target": "stack_next"
+    },
+    {
+      "id": "stack_next-next-tower_view",
+      "source": "stack_next",
+      "port": "next",
+      "target": "tower_view"
+    },
+    {
+      "id": "watch_tower-next-tower_view",
+      "source": "watch_tower",
+      "port": "next",
+      "target": "tower_view"
+    },
+    {
+      "id": "clear_view-next-clear_known",
+      "source": "clear_view",
+      "port": "next",
+      "target": "clear_known"
+    },
+    {
+      "id": "clear_known-false-clear_wait",
+      "source": "clear_known",
+      "port": "false",
+      "target": "clear_wait"
+    },
+    {
+      "id": "clear_wait-next-clear_view",
+      "source": "clear_wait",
+      "port": "next",
+      "target": "clear_view"
+    },
+    {
+      "id": "clear_known-true-all_clear",
+      "source": "clear_known",
+      "port": "true",
+      "target": "all_clear"
+    },
+    {
+      "id": "all_clear-false-clear_policy",
+      "source": "all_clear",
+      "port": "false",
+      "target": "clear_policy"
+    },
+    {
+      "id": "clear_policy-next-clear_view",
+      "source": "clear_policy",
+      "port": "next",
+      "target": "clear_view"
+    },
+    {
+      "id": "all_clear-true-plug_attempt",
+      "source": "all_clear",
+      "port": "true",
+      "target": "plug_attempt"
+    },
+    {
+      "id": "plug_attempt-next-plug_view",
+      "source": "plug_attempt",
+      "port": "next",
+      "target": "plug_view"
+    },
+    {
+      "id": "plug_view-next-plug_success",
+      "source": "plug_view",
+      "port": "next",
+      "target": "plug_success"
+    },
+    {
+      "id": "plug_success-false-plug_attempt",
+      "source": "plug_success",
+      "port": "false",
+      "target": "plug_attempt"
+    },
+    {
+      "id": "plug_success-true-return_start",
+      "source": "plug_success",
+      "port": "true",
+      "target": "return_start"
+    },
+    {
+      "id": "return_start-next-cycle_unplug",
+      "source": "return_start",
+      "port": "next",
+      "target": "cycle_unplug"
+    },
+    {
+      "id": "cycle_unplug-next-unplug_view",
+      "source": "cycle_unplug",
+      "port": "next",
+      "target": "unplug_view"
+    },
+    {
+      "id": "unplug_view-next-unplug_success",
+      "source": "unplug_view",
+      "port": "next",
+      "target": "unplug_success"
+    },
+    {
+      "id": "unplug_success-false-cycle_unplug",
+      "source": "unplug_success",
+      "port": "false",
+      "target": "cycle_unplug"
+    },
+    {
+      "id": "unplug_success-true-plug_attempt",
+      "source": "unplug_success",
+      "port": "true",
+      "target": "plug_attempt"
+    }
+  ]
+}

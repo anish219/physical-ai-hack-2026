@@ -11,13 +11,16 @@ import pytest
 from dream_hackathon.demo_vlm import LocalVLM, OpenAIVLM, Verdict, run_cases
 
 
-@pytest.mark.parametrize("content", [
-    '{"verdict": true, "reason": "x"}',
-    '{"verdict": "yes"}',
-    '{"verdict": "yes", "reason": 3}',
-    '{"verdict": "maybe", "reason": "x"}',
-    '[]',
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"verdict": true, "reason": "x"}',
+        '{"verdict": "yes"}',
+        '{"verdict": "yes", "reason": 3}',
+        '{"verdict": "maybe", "reason": "x"}',
+        "[]",
+    ],
+)
 def test_malformed_verdict_is_not_positive(content):
     with pytest.raises(ValueError):
         Verdict.parse(content)
@@ -38,14 +41,24 @@ def test_real_http_protocol_and_no_expected_label_in_prompt(tmp_path, provider):
             requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
             self.send_response(200)
             self.end_headers()
-            response = {
-                "message": {"content": '{"verdict": "yes", "reason": "visible"}'}
-            } if provider == "ollama" else {
-                "status": "completed",
-                "output": [{"type": "message", "content": [{
-                    "type": "output_text", "text": '{"verdict": "yes", "reason": "visible"}',
-                }]}],
-            }
+            response = (
+                {"message": {"content": '{"verdict": "yes", "reason": "visible"}'}}
+                if provider == "ollama"
+                else {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": '{"verdict": "yes", "reason": "visible"}',
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
             self.wfile.write(json.dumps(response).encode())
 
     (tmp_path / "frame.jpg").write_bytes(b"\xff\xd8\xff image fixture, not real inference")
@@ -80,10 +93,13 @@ def test_real_http_protocol_and_no_expected_label_in_prompt(tmp_path, provider):
     assert base64.b64decode(encoded) == (tmp_path / "frame.jpg").read_bytes()
 
 
-@pytest.mark.parametrize("response", [
-    {"status": "incomplete"},
-    {"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal"}]}]},
-])
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "incomplete"},
+        {"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal"}]}]},
+    ],
+)
 def test_hosted_nonverdict_is_reported_as_error(monkeypatch, response):
     monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: io.BytesIO(json.dumps(response).encode()))
     with pytest.raises(ValueError):
@@ -100,3 +116,36 @@ def test_unknown_is_recorded_without_turning_into_a_yes(tmp_path):
     (tmp_path / "frame.jpg").write_bytes(b"fixture")
     report = run_cases(Client(), [{"image": "frame.jpg", "question": "Visible?", "expected": "yes"}], tmp_path)
     assert not report["passed"]
+
+
+@pytest.mark.parametrize("provider", ["ollama", "openai"])
+def test_custom_scene_schema_round_trips_structured_facts(monkeypatch, provider):
+    scene = {"known": True, "block_count": 6, "collapsed": False, "standing_free": True}
+    schema = {"type": "object", "properties": {"block_count": {"type": "integer"}}}
+    requests = []
+
+    def response(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        payload = (
+            {"message": {"content": json.dumps(scene)}}
+            if provider == "ollama"
+            else {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": json.dumps(scene)},
+                        ],
+                    }
+                ],
+            }
+        )
+        return io.BytesIO(json.dumps(payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", response)
+    client = LocalVLM("test") if provider == "ollama" else OpenAIVLM("test", "test-key")
+    result, _ = client.inspect(b"\xff\xd8\xff fixture", "Inspect the tower", schema)
+    assert result == scene
+    sent_schema = requests[0]["format"] if provider == "ollama" else requests[0]["text"]["format"]["schema"]
+    assert sent_schema == schema

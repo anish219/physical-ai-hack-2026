@@ -47,7 +47,7 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <p class="zero-note" id="left-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="left-input-dream" aria-pressed="false">Dream API</button><button id="left-input-so101" aria-pressed="false">SO-101</button>
 <button id="left-input-sequence" aria-pressed="false">Sequences</button>
-<button id="left-input-auto" aria-pressed="false">Full Auto Control</button></div>
+<button hidden id="left-input-auto" aria-pressed="false">Full Auto Control</button></div>
 <label for="left-grip-torque">Gripper holding torque <output id="left-grip-value">—</output></label>
 <input id="left-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
 <div class="feedback" id="left-grip-feedback"></div><p class="status" id="left-status"></p></article>
@@ -60,7 +60,7 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <p class="zero-note" id="right-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="right-input-dream" aria-pressed="false">Dream API</button><button id="right-input-so101" aria-pressed="false">SO-101</button>
 <button id="right-input-sequence" aria-pressed="false">Sequences</button>
-<button id="right-input-auto" aria-pressed="false">Full Auto Control</button></div>
+<button hidden id="right-input-auto" aria-pressed="false">Full Auto Control</button></div>
 <label for="right-grip-torque">Gripper holding torque <output id="right-grip-value">—</output></label>
 <input id="right-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
 <div class="feedback" id="right-grip-feedback"></div><p class="status" id="right-status"></p></article>
@@ -89,19 +89,15 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <article class="card" id="auto-both-panel" hidden></article>
 </section></div>
 <section id="flow-tab" role="tabpanel" aria-labelledby="tab-flow" hidden>
-<div class="card flow-header"><div><p class="panel-label">Full Auto · flow editor</p><h2>Orchestration</h2></div>
-<label>Flow<select id="flow-selection"><option value="both">Both arms</option><option value="left">Left arm</option><option value="right">Right arm</option></select></label>
-<div class="actions"><button id="flow-save">Save flow</button><button id="flow-reload">Load saved</button><button id="flow-export">Export</button><button id="flow-import">Import</button></div>
-<input id="flow-import-file" type="file" accept="application/json,.json" hidden>
-<p id="flow-save-status" role="status">Saved flow</p></div>
-<div class="flow-tools"><span>Add block</span><button data-add-block="trigger">Trigger</button><button data-add-block="action">Operation</button><button data-add-block="condition">Condition</button><button data-add-block="loop">Loop</button><button data-add-block="fork">Parallel</button><button data-add-block="join">Join</button><button data-add-block="end">End</button><button data-add-block="start">Go</button><button id="flow-example">Loop example</button></div>
-<div class="flow-help"><span id="flow-connect-hint">Connect an output port to an input port. Drag block headers to arrange.</span><div><button id="flow-zoom-out" aria-label="Zoom out">−</button><span id="flow-zoom-label">100%</span><button id="flow-zoom-in" aria-label="Zoom in">+</button></div></div>
-<div class="flow-workspace"><div id="flow-viewport" tabindex="0" aria-label="Flow chart canvas"><div id="flow-canvas"><svg id="flow-edges" aria-label="Flow connections"></svg><div id="flow-nodes"></div></div></div>
-<aside class="card" id="flow-inspector"><h3>Block settings</h3><p>Select a block or connection.</p></aside></div>
-<div class="card flow-runtime"><h3>Live run</h3><p id="flow-run-status">Idle · Go / Stop is on the Controller tab under Full Auto.</p>
-<details><summary>Signals, operation results and variables</summary><pre id="flow-context"></pre></details>
-<div class="flow-signal"><label>Input signal name<input id="flow-signal-name" type="text" placeholder="usb_pass or vlm_usb"></label><label>JSON value<textarea id="flow-signal-value" rows="2">true</textarea></label><button id="flow-signal-send">Send input</button></div>
-<p>Inputs are scoped to this run and reset on Go. External verifiers can POST to <code>/api/flows/{left|right|both}/signal</code>.</p></div>
+<div class="flow-toolbar"><button id="flow-back">Controller</button><strong>Orchestration</strong>
+<button id="flow-save">Save</button><button id="flow-reload">Load saved</button><button id="flow-export">Export</button><button id="flow-import">Import</button>
+<button id="flow-strategy">Demo strategy</button><button id="flow-settings">Map settings</button>
+<select id="flow-add" aria-label="Add block"><option value="">+ Add block</option><option value="trigger">Trigger</option><option value="action">Operation</option><option value="condition">Condition</option><option value="loop">Loop</option><option value="fork">Parallel</option><option value="join">Join</option><option value="end">End</option><option value="start">Go</option></select>
+<button id="flow-fit">Fit map</button><button id="flow-zoom-out" aria-label="Zoom out">-</button><span id="flow-zoom-label">65%</span><button id="flow-zoom-in" aria-label="Zoom in">+</button>
+<span id="flow-run-status" role="status">Idle</span><input id="flow-import-file" type="file" accept="application/json,.json" hidden>
+</div><div class="flow-statusbar"><span id="flow-save-status">Saved map</span><span id="flow-connect-hint">Click a block for settings. Connect output to input.</span></div>
+<div class="flow-workspace"><div id="flow-viewport" tabindex="0" aria-label="Flow chart canvas"><div id="flow-space"><div id="flow-canvas"><div id="flow-lanes"></div><svg id="flow-edges" aria-label="Flow connections"></svg><div id="flow-nodes"></div></div></div></div>
+<aside class="card" id="flow-inspector" aria-label="Block settings" hidden></aside></div>
 </section><p class="error" id="message" role="status"></p>
 <template id="auto-panel-template"><p class="panel-label">Full Auto input</p><h2 data-auto-field="title"></h2>
 <p>Runs the saved flow. Configure triggers and operations in the Orchestration tab. Edits apply on the next Go.</p>

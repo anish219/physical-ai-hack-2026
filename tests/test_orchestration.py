@@ -327,6 +327,7 @@ def test_controller_routes_main_full_auto_and_serves_editor(tmp_path):
     try:
         assert request(base, "/api/flows/both/go", {})[0] == 400
         assert request(base, "/api/both/input", {"source": "auto"})[0] == 200
+        assert request(base, "/api/flows/both/save", {"definition": default_graph()})[0] == 200
         assert request(base, "/api/flows/both/go", {})[0] == 200
         complete(controller.flows.runs["both"])
         assert request(base, "/orchestration.js")[0] == 200
