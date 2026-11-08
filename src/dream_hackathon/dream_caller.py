@@ -89,23 +89,67 @@ def selected_rows(action: dict, side: str) -> list[list[float]]:
     return rows.tolist()
 
 
+class JointModelClient:
+    """Native joint checkpoint wire adapter; its declared embodiment selects camera/state slots."""
+
+    def __init__(self, client, embodiment):
+        self.client, self.embodiment = client, embodiment
+        self.sides = tuple(value['side'] for value in embodiment['parts']['action'].values()
+                           if value.get('kind') == 'arm')
+
+    def set_observation(self, frames, state, *, timestamp):
+        selected_frames = {f'video.{key}': frames[f'video.{key}'] for key in self.embodiment['video']}
+        selected_state = {'prompt': state['prompt']}
+        selected_state.update({f'state.{key}': state[f'state.{key}'] for key in self.embodiment['state']})
+        self.client.set_observation(selected_frames, selected_state, timestamp=timestamp)
+
+    def get_action(self):
+        reply = self.client.get_action()['per_key']
+        result = {}
+        for side in self.sides:
+            joints = np.asarray(reply[f'action.{side}_arm'], dtype=float)
+            grip = np.asarray(reply[f'action.{side}_gripper'], dtype=float).reshape(-1)
+            spec = self.embodiment['parts']['action'][f'{side}_gripper']
+            normalized = (grip - spec['closed']) / (spec['open'] - spec['closed'])
+            if joints.shape != (len(grip), 6) or not np.isfinite(joints).all():
+                raise ValueError('Joint checkpoint returned invalid joint rows')
+            if not np.isfinite(normalized).all() or (normalized < 0).any() or (normalized > 1).any():
+                raise ValueError('Joint checkpoint returned invalid gripper rows')
+            result['q_l_chunk' if side == 'left' else 'q_r_chunk'] = np.column_stack([joints, normalized]).tolist()
+        return result
+
+    def close(self):
+        self.client.close()
+
+
 def open_client(checkpoint: str, hz: float) -> Any:
     import dream
 
     client = dream.DreamClient()
     try:
-        client.policy(
-            {
-                "checkpoint": checkpoint,
-                "embodiment": layouts.embodiment("makermods"),
-                "ik": {"arm": "metal", "head": "eef"},
-                "action_hz": hz,
-            }
-        )
+        if checkpoint.startswith('dream-1-ft:'):
+            model = next(model for model in client.get_models() if model.id == checkpoint)
+            body = model.embodiment_config
+            if body and not any('eef' in key for key in body['action']):
+                client.policy({'checkpoint': checkpoint, 'embodiment': body, 'action_hz': hz})
+                return JointModelClient(client, body)
+        client.policy({'checkpoint': checkpoint, 'embodiment': layouts.embodiment('makermods'),
+                       'ik': {'arm': 'metal', 'head': 'eef'}, 'action_hz': hz})
     except Exception:
         client.close()
         raise
     return client
+
+
+def available_models() -> list[dict]:
+    """List account checkpoints without opening a policy or invoking inference."""
+    import dream
+
+    with dream.DreamClient() as client:
+        return [
+            {"id": model.id, "owner": model.owner, "servable": model.servable}
+            for model in client.get_models()
+        ]
 
 
 class ArmCaller:
@@ -239,6 +283,9 @@ class ArmCaller:
         client = None
         try:
             client = self.client_factory(checkpoint, self.hz)
+            targets = tuple(getattr(self, "sides", (self.side,)))
+            if isinstance(client, JointModelClient) and set(targets) != set(client.sides):
+                raise ValueError("Checkpoint controls only " + ", ".join(client.sides))
             with self.lock:
                 if cancel.is_set():
                     return
@@ -417,6 +464,7 @@ def handler_for(callers: dict[str, ArmCaller]) -> type[BaseHTTPRequestHandler]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--list-models", action="store_true", help="Print account checkpoints and exit")
     parser.add_argument("--left-url", default="http://127.0.0.1:8691")
     parser.add_argument("--right-url", default="http://127.0.0.1:8692")
     parser.add_argument("--port", type=int, default=8082)
@@ -426,6 +474,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--height", type=int, default=180)
     parser.add_argument("--main-controller", action="store_true", help="Include Both and use direct SDK targets")
     args = parser.parse_args(argv)
+    if args.list_models:
+        print(json.dumps({"models": available_models()}))
+        return
     if min(args.action_hz, args.observation_hz, args.width, args.height) <= 0:
         parser.error("rates and image dimensions must be positive")
     callers = {
