@@ -125,6 +125,8 @@ class RunnerBackend:
                 groups.append([k])
         return sorted([g for g in groups if len(g) >= 2], key=len, reverse=True)
 
+    tower_spot = None  # set per round from the controller settings ("x,y" cm)
+
     def _plan(self, budget=20.0):  # 40 s held the first pick 44 s after the looks (Nov 8 13:56)
         t = self.t
         stacks = self._stacks()
@@ -163,6 +165,10 @@ class RunnerBackend:
         # the tower area, biased left (+y, image-left on the overhead): the blocks refused on Nov 8 sat at y < -15 cm,
         # toward the strip, and a base there put the tower in their routes. TOWER_Y_MIN (m) overrides the left bias.
         t.spot_area = ((0.19, 0.29), (float(os.environ.get("TOWER_Y_MIN", "-0.03")), 0.15))
+        spot_env = os.environ.get("TOWER_SPOT") or self.tower_spot  # "x,y" in cm: the tower pinned within 1.5 cm of it
+        if spot_env:
+            sx, sy = (float(v) / 100.0 for v in str(spot_env).split(","))
+            t.spot_area = ((sx - 0.015, sx + 0.015), (sy - 0.015, sy + 0.015))
         res = t.best_sequence(order, tuple(self.tower), budget=budget)
         if res is None:
             raise D.Fatal(f"no tower spot plans: {dict(t.why)}")

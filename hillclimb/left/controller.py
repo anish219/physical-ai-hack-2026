@@ -41,6 +41,7 @@ class Settings:
     drive: str = "auto"  # auto: this controller places blocks; external: the main controller calls /left/stack_next
     round_s: float = 300.0
     max_goal: int = 9
+    tower_spot: str = ""  # "x,y" in cm pins the scripted tower there (e.g. "7,27": 75 deg left, 28 cm out); "" = planner's choice
     crunch_at_s: float = 90.0  # time left at which crunch_goal takes over
     crunch_goal: int = 5
     freeze_s: float = 20.0
@@ -125,6 +126,8 @@ class LeftController:
             self._gate_file(False)
             self._set("IDLE", "armed")
             self.backend = self._make_backend()
+            if hasattr(self.backend, "tower_spot"):
+                self.backend.tower_spot = new.tower_spot or None
             if hasattr(self.backend, "table_reset"):
                 # every round starts on a table people reset (judges in a match, the team in practice): towers in the
                 # records from earlier rounds are no longer there (Nov 8 14:25: a practice round adopted a gone tower)
