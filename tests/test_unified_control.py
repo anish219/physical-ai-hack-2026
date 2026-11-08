@@ -4,6 +4,7 @@ import json
 import pathlib
 import threading
 import time
+import urllib.request
 from contextlib import ExitStack
 from types import SimpleNamespace
 
@@ -217,20 +218,16 @@ def test_page_contains_every_existing_leader_control_and_routes_to_selected_chil
             "left-input-auto",
             "right-input-auto",
             "so101-panel",
-            "dream-panel",
+            "api-left-panel",
+            "api-right-panel",
+            "api-both-panel",
+            "both-input-dream",
+            "both-input-auto",
         ):
             assert f'id="{control}"'.encode() in html
-        assert html.index(b'id="so101-panel"') < html.index(b'id="dream-panel"')
-        for control in (
-            "api-selection",
-            "api-task",
-            "api-checkpoint",
-            "api-connect",
-            "api-call",
-            "api-run",
-            "api-stop",
-        ):
-            assert f'id="{control}"'.encode() in html
+        assert b'id="so101-panel" hidden' in html
+        assert b'id="api-panel-template"' in html
+        assert request(base, "/controller.js")[0] == 200
         for path in ("/api/control", "/api/home", "/api/reject", "/api/kill"):
             assert request(base, path, {})[0] == 200
         assert [a[0] for a in actions] == ["/api/control", "/api/control", "home", "/api/reject", "/api/kill"]
@@ -416,12 +413,18 @@ def test_input_selection_hands_off_and_so101_is_exclusive(tmp_path):
             assert controller.inputs == {"left": "dream", "right": "dream"}
             assert left_node.snapshot()["grip_torque_nm"] == 1.35
             assert right_node.snapshot()["grip_torque_nm"] == 0.75
+            with pytest.raises(ValueError, match="Select Dream API"):
+                controller.dream_action("both", "run", {"task": "move"})
+            controller.select_both("dream")
+            assert controller.combined_input == "dream"
+            assert controller.inputs == {"left": None, "right": None}
             callers["both"].connect()
             wait_for(lambda: callers["both"].sample is not None)
             controller.dream_action("both", "run", {"task": "move"})
             assert model.entered.wait(2)
             controller.select_input("right", "so101")
-            assert controller.inputs == {"left": "dream", "right": "so101"}
+            assert controller.inputs == {"left": None, "right": "so101"}
+            assert controller.combined_input is None
             assert left_node.snapshot()["grip_torque_nm"] == 1.35
             assert right_node.snapshot()["grip_torque_nm"] == 0.75
             model.release.set()
@@ -465,3 +468,96 @@ def test_arm_torque_endpoint_works_without_leader_and_is_applied_during_api_targ
         for node in (left, right):
             node.power(False)
             node.close()
+
+
+def test_shared_api_drafts_stream_to_two_clients_and_run_uses_latest_text():
+    starts = []
+
+    class Caller:
+        def __init__(self, selection):
+            self.sides = ("left", "right") if selection == "both" else (selection,)
+
+        def snapshot(self):
+            return {"running": False}
+
+        def cancel_playback(self):
+            pass
+
+        def start(self, values, *, run):
+            starts.append((dict(values), run))
+
+    nodes = {
+        side: SimpleNamespace(snapshot=lambda: {"arm_open": False}, cancel_home=lambda: None)
+        for side in ("left", "right")
+    }
+    leader = SimpleNamespace(side=None, state=lambda: Controls(1, "none").snapshot())
+    callers = {selection: Caller(selection) for selection in ("left", "right", "both")}
+    controller = unified_control.UnifiedController(nodes, leader, callers)
+    page = unified_control.UnifiedPage(controller, 0)
+    base = f"http://127.0.0.1:{page.port}"
+
+    def event(stream):
+        while line := stream.readline():
+            if line.startswith(b"data: "):
+                return json.loads(line[6:])
+        raise AssertionError("Event stream closed")
+
+    try:
+        with (
+            urllib.request.urlopen(base + "/api/events", timeout=3) as first,
+            urllib.request.urlopen(base + "/api/events", timeout=3) as second,
+        ):
+            assert event(first)["type"] == event(second)["type"] == "drafts"
+            code, payload, _ = request(base, "/api/dream/left/draft", {"task": "pick u", "client_id": "one"})
+            assert code == 200
+            first_event, second_event = event(first), event(second)
+            assert first_event == second_event == json.loads(payload)
+            assert not starts
+            request(base, "/api/dream/left/draft", {"task": "pick up the cube", "client_id": "two"})
+            assert event(first)["fields"]["task"] == event(second)["fields"]["task"] == "pick up the cube"
+            state = json.loads(request(base, "/api/state")[1])
+            assert state["api_drafts"]["left"]["task"] == "pick up the cube"
+            assert state["api_drafts"]["right"]["task"] == state["api_drafts"]["both"]["task"] == ""
+            controller.select_input("left", "dream")
+            controller.dream_action("left", "run", {})
+            assert starts[0][0]["task"] == "pick up the cube"
+            assert starts[0][1] is True
+    finally:
+        page.close()
+
+
+def test_both_selection_is_exclusive_and_never_accepts_so101():
+    class Leader:
+        side = None
+
+        def state(self):
+            return Controls(1, self.side or "none").snapshot()
+
+        def select(self, side):
+            self.side = side
+
+        def action(self, path, body):
+            pass
+
+    nodes = {
+        side: SimpleNamespace(snapshot=lambda: {"arm_open": False, "grip_torque_nm": 1}, cancel_home=lambda: None)
+        for side in ("left", "right")
+    }
+    controller = unified_control.UnifiedController(nodes, Leader())
+    controller.select_input("left", "so101")
+    controller.select_input("right", "dream")
+    controller.select_both("dream")
+    assert controller.leader.side is None
+    assert controller.inputs == {"left": None, "right": None}
+    assert controller.state()["combined_input"] == "dream"
+    controller.select_input("left", "dream")
+    assert controller.combined_input is None
+    assert controller.inputs == {"left": "dream", "right": None}
+    controller.select_input("right", "dream")
+    assert controller.inputs == {"left": "dream", "right": "dream"}
+    controller.select_both("dream")
+    controller.select_both(None)
+    assert controller.combined_input is None and not any(controller.inputs.values())
+    for source in ("so101", "auto"):
+        with pytest.raises(ValueError, match="Both supports"):
+            controller.select_both(source)

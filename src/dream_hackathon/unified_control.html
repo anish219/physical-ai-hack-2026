@@ -12,23 +12,23 @@ button{cursor:pointer;padding:12px 14px;border-radius:9px;background:#273139;col
 button:hover{filter:brightness(1.15)}button:disabled{opacity:.35;cursor:default}
 button[aria-pressed=true]{background:#b5f2cb;color:#10281a;border-color:#b5f2cb}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid #b5f2cb;outline-offset:3px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{padding:22px;background:#191e22;border:1px solid #343e46;border-radius:16px}
+[hidden]{display:none!important}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{padding:22px;background:#191e22;border:1px solid #343e46;border-radius:16px}
 .card-title{display:flex;justify-content:space-between;align-items:center}.badge{font-size:11px;border-radius:20px;padding:6px 10px;background:#30383f}
 .badge[data-on=true]{color:#b5f2cb}.actions{display:flex;gap:9px;flex-wrap:wrap}.actions button{flex:1}
 .power{background:#b5f2cb;color:#10281a}.power[data-on=true]{background:#5f292c;color:#ffdad6;border-color:#824247}
 .inputs{display:grid;gap:8px}.inputs button{text-align:left}.inputs small{float:right;opacity:.7}
 .status{min-height:40px;margin:13px 0 0}.zero-note{margin:10px 0 0;font-size:11px}
-.panels{margin-top:24px;align-items:start}.panel-label{font-size:11px;letter-spacing:.12em;color:#93a7b8;text-transform:uppercase;margin:0 0 8px}
+.arm-grid{grid-template-columns:minmax(0,1fr)150px minmax(0,1fr)}.both-card{align-self:center;text-align:center;padding:18px 10px}.both-card .inputs button{text-align:center}.panels.single{grid-template-columns:1fr}.panels{margin-top:24px;align-items:start}.panel-label{font-size:11px;letter-spacing:.12em;color:#93a7b8;text-transform:uppercase;margin:0 0 8px}
 label{display:block;font-size:13px;color:#bac4cc;margin:18px 0 8px}input[type=text],textarea,select{width:100%;padding:11px;
 color:#edf0f3;background:#10171b;border:1px solid #46535d;border-radius:8px}input[type=range]{width:100%;accent-color:#b5f2cb}
 output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12px;color:#a5afb8;margin-top:10px}
 .spaced{margin-top:12px}.error{color:#ffb4ac;white-space:pre-line;min-height:20px}pre{font-size:11px;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .cameras{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:20px 0}.cameras img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#101315;border-radius:8px}
 .cameras figcaption{font-size:11px;color:#a5afb8;margin-top:6px}figure{margin:0}
-@media(max-width:720px){body{padding:16px}.grid{grid-template-columns:1fr}.cameras{gap:6px}.card{padding:18px}}
+@media(max-width:720px){body{padding:16px}.grid,.arm-grid{grid-template-columns:1fr}.cameras{gap:6px}.card{padding:18px}}
 </style></head><body><main>
 <header><div><span class="eyebrow">NUCK-1 · Metal arms</span><h1>Station control</h1></div><span class="badge" id="connection">Connecting</span></header>
-<section class="grid" aria-label="Arms">
+<section class="grid arm-grid" aria-label="Arms">
 <article class="card" id="left-arm"><div class="card-title"><h2>Left arm</h2><span class="badge" id="left-power-state">OFF</span></div>
 <div class="actions"><button class="power" id="left-power">Turn on</button><button id="left-home">Return to 0</button><button id="left-zero">Set 0</button></div>
 <p class="zero-note" id="left-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
@@ -37,6 +37,9 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <label for="left-grip-torque">Gripper holding torque <output id="left-grip-value">—</output></label>
 <input id="left-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
 <div class="feedback" id="left-grip-feedback"></div><p class="status" id="left-status"></p></article>
+<article class="card both-card" id="both-arms"><h2>Both arms</h2><div class="inputs">
+<button id="both-input-dream" aria-pressed="false">Dream API</button>
+<button id="both-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div></article>
 <article class="card" id="right-arm"><div class="card-title"><h2>Right arm</h2><span class="badge" id="right-power-state">OFF</span></div>
 <div class="actions"><button class="power" id="right-power">Turn on</button><button id="right-home">Return to 0</button><button id="right-zero">Set 0</button></div>
 <p class="zero-note" id="right-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
@@ -50,8 +53,8 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <figure><img id="cam-left" alt="Left wrist camera"><figcaption>Left wrist</figcaption></figure>
 <figure><img id="cam-top" alt="Top camera"><figcaption>Top camera</figcaption></figure>
 <figure><img id="cam-right" alt="Right wrist camera"><figcaption>Right wrist</figcaption></figure></section>
-<section class="grid panels" aria-label="Input controls">
-<article class="card" id="so101-panel"><p class="panel-label">Leader input</p><div class="card-title"><h2>SO-101</h2><span class="badge" id="side">Not assigned</span></div>
+<section class="grid panels" id="input-panels" aria-label="Input controls" hidden>
+<article class="card" id="so101-panel" hidden><p class="panel-label">Leader input</p><div class="card-title"><h2>SO-101</h2><span class="badge" id="side">Not assigned</span></div>
 <p id="hint">Choose SO-101 under either arm. Click it again to release the assignment.</p>
 <span class="badge" id="tracking-state">UNTRACKED</span>
 <div class="actions spaced"><button id="track">Track</button><button id="untrack">Untrack</button></div>
@@ -59,83 +62,18 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <input id="scale" type="range" min="0" max="3" step="0.05" value="1">
 <div class="actions spaced"><button id="record">Record example</button><button id="reject">Reject example</button></div>
 <p id="record-status"></p></article>
-<article class="card" id="dream-panel"><p class="panel-label">Model input</p><h2>Dream API</h2>
-<p id="api-assignment">Choose Dream API under one or both arms.</p>
-<label for="api-selection">Call for</label><select id="api-selection"><option value="left">Left arm</option><option value="right">Right arm</option><option value="both">Both arms</option></select>
-<label for="api-task">Task</label><textarea id="api-task" rows="3" placeholder="Put the cube in the bowl"></textarea>
-<label for="api-checkpoint">Checkpoint</label><input type="text" id="api-checkpoint" value="dreamlabs/dream-1-beta">
-<div class="actions spaced"><button id="api-connect">Connect</button><button id="api-call">Call once · inspect</button></div>
-<div class="actions spaced"><button id="api-run">Run API</button><button id="api-stop">Stop API</button></div>
-<p id="api-status">Not connected</p><p class="error" id="api-error"></p>
-<details><summary>Observation and prediction</summary><pre id="api-result"></pre></details></article>
+<article class="card" id="api-left-panel" hidden></article>
+<article class="card" id="api-right-panel" hidden></article>
+<article class="card" id="api-both-panel" hidden></article>
 </section><p class="error" id="message" role="status"></p>
-</main><script>
-const $=id=>document.getElementById(id);
-let station={},apiSelection='left',drafts={},dragging=false,gripDragging={};
-function saveDraft(){drafts[apiSelection]={task:$('api-task').value,checkpoint:$('api-checkpoint').value};}
-function selectApi(value){saveDraft();apiSelection=value;$('api-selection').value=value;
-const d=drafts[value]||(station.dream||{})[value]||{};$('api-task').value=d.task||'';
-$('api-checkpoint').value=d.checkpoint||'dreamlabs/dream-1-beta';}
-async function action(path,body={}){try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-const s=await r.json();if(!r.ok)throw Error(s.error);$('message').textContent='';render(s);return s;}
-catch(e){$('message').textContent=e.message;return null;}}
-function render(s){station=s;const inputs=s.inputs||{},arms=s.arms||{};
-for(const side of ['left','right']){const a=arms[side]||{};
-$(side+'-power-state').textContent=a.arm_open?'ON':a.requested_power?'STARTING':'OFF';
-$(side+'-power-state').dataset.on=!!a.arm_open;$(side+'-power').dataset.on=!!a.arm_open;
-$(side+'-power').textContent=a.arm_open?'Turn off / kill':'Turn on';
-$(side+'-home').textContent=a.homing?'Returning…':'Return to 0';
-$(side+'-home').disabled=!!a.homing;$(side+'-zero').disabled=!a.arm_open;
-$(side+'-zero-note').textContent=a.zero_joints?'Saved zero · retained across Kill and power-on':'First power-on captures the initial zero';
-$(side+'-status').textContent=a.message||'';
-if(!gripDragging[side]&&a.grip_torque_nm!=null){$(side+'-grip-torque').value=a.grip_torque_nm;
-$(side+'-grip-value').textContent=Number(a.grip_torque_nm).toFixed(2)+' N·m';}
-const applied=a.grip_applied_torque_nm==null?'pending power-on':Number(a.grip_applied_torque_nm).toFixed(2)+' N·m';
-const measured=a.grip_measured_torque_nm==null?'—':Math.abs(a.grip_measured_torque_nm).toFixed(2)+' N·m';
-$(side+'-grip-feedback').textContent='Applied: '+applied+' · Measured: '+measured+(a.grip_holding?' · HOLDING':'');
-for(const source of ['dream','so101'])$(side+'-input-'+source).setAttribute('aria-pressed',String(inputs[side]===source));}
-const assigned=!!s.assigned_side;$('side').textContent=assigned?s.assigned_side+' arm':'Not assigned';
-$('tracking-state').textContent=s.tracking?'TRACKED':'UNTRACKED';$('tracking-state').dataset.on=!!s.tracking;
-for(const id of ['track','untrack','scale'])$(id).disabled=!assigned;
-$('hint').textContent=assigned?'Track captures fresh leader and arm anchors. Untrack holds position.':'Choose SO-101 under either arm. Only one arm can use the leader.';
-if(!dragging){$('scale').value=s.scale;$('value').textContent=Number(s.scale).toFixed(2)+'×';}
-$('record').disabled=!assigned||!s.arm_open;$('record').textContent=s.recording_requested?'Stop & save example':'Record example';
-$('reject').disabled=!assigned||!(s.recording||s.recording_requested||s.saved_episodes);
-$('reject').textContent=s.recording||s.recording_requested?'Reject current example':'Reject last saved example';
-$('record-status').textContent=[s.recording?'Recording · '+s.frames+' frames':s.saved_episodes+' saved examples',s.dataset_dir,s.recording_error].filter(Boolean).join(' · ');
-const apiSides=['left','right'].filter(side=>inputs[side]==='dream');
-$('api-assignment').textContent=apiSides.length?'Assigned to '+apiSides.join(' + ')+' arm'+(apiSides.length===2?'s':''):'Choose Dream API under one or both arms.';
-const available=apiSides.length===2?'both':apiSides[0];
-if(available&&((apiSelection==='both'&&apiSides.length!==2)||!apiSides.includes(apiSelection)&&apiSelection!=='both'))selectApi(available);
-const a=(s.dream||{})[apiSelection]||{};
-$('api-run').disabled=!!a.busy||!(apiSelection==='both'?apiSides.length===2:apiSides.includes(apiSelection));
-$('api-call').disabled=!!a.busy;
-$('api-status').textContent=(a.mode||'idle')+' · '+(a.calls||0)+' calls · '+(a.commands||0)+' rows sent';
-$('api-error').textContent=a.error||a.observation_error||'';
-$('api-result').textContent=JSON.stringify({observation:a.observation,rows:a.rows},null,2);}
-for(const side of ['left','right']){
-$(side+'-power').onclick=()=>action('/api/arms/'+side+'/power',{enabled:!station.arms[side].arm_open});
-$(side+'-home').onclick=()=>action('/api/arms/'+side+'/home');
-$(side+'-zero').onclick=()=>action('/api/arms/'+side+'/zero');
-$(side+'-grip-torque').oninput=()=>{gripDragging[side]=true;
-$(side+'-grip-value').textContent=Number($(side+'-grip-torque').value).toFixed(2)+' N·m';};
-$(side+'-grip-torque').onchange=async()=>{const torque=Number($(side+'-grip-torque').value);
-await action('/api/arms/'+side+'/grip-torque',{torque_nm:torque});gripDragging[side]=false;render(station);};
-for(const source of ['dream','so101'])$(side+'-input-'+source).onclick=async()=>{
-const s=await action('/api/arms/'+side+'/input',{source:station.inputs[side]===source?null:source});
-if(s&&source==='dream'&&s.inputs[side]==='dream'){selectApi(s.inputs.left==='dream'&&s.inputs.right==='dream'?'both':side);render(s);}};}
-$('api-selection').onchange=e=>{selectApi(e.target.value);render(station);};
-for(const name of ['connect','call','run','stop'])$('api-'+name).onclick=()=>{
-saveDraft();action('/api/dream/'+apiSelection+'/'+name,drafts[apiSelection]);};
-$('track').onclick=()=>action('/api/control',{tracking:true});$('untrack').onclick=()=>action('/api/control',{tracking:false});
-$('record').onclick=()=>action('/api/control',{recording_requested:!station.recording_requested});
-$('reject').onclick=()=>action('/api/reject');
-$('scale').oninput=()=>{dragging=true;$('value').textContent=Number($('scale').value).toFixed(2)+'×';};
-$('scale').onchange=()=>{dragging=false;action('/api/control',{scale:Number($('scale').value)});};
-async function poll(){try{const r=await fetch('/api/state');if(!r.ok)throw Error('Connection unavailable');render(await r.json());$('connection').textContent='Connected';}
-catch(e){$('connection').textContent='Disconnected';}}
-function cameras(){for(const [id,role] of [['cam-left','left'],['cam-top','overhead'],['cam-right','right']]){
-const image=$(id);if(image.dataset.loading==='true')continue;image.dataset.loading='true';
-image.onload=image.onerror=()=>{image.dataset.loading='false';};image.src='/api/camera/'+role+'.jpg?t='+Date.now();}}
-poll();setInterval(poll,500);cameras();setInterval(cameras,500);
-</script></body></html>
+<template id="api-panel-template">
+<p class="panel-label">Model input</p><h2 data-field="title"></h2>
+<label data-for="task">Task</label><textarea data-field="task" rows="3" placeholder="Put the cube in the bowl"></textarea>
+<p class="feedback">Text is shared live with everyone connected. Run uses this task.</p>
+<label data-for="checkpoint">Checkpoint</label><input type="text" data-field="checkpoint" value="dreamlabs/dream-1-beta">
+<div class="actions spaced"><button data-field="connect">Connect</button><button data-field="call">Call once · inspect</button></div>
+<div class="actions spaced"><button data-field="run">Run API</button><button data-field="stop">Stop API</button></div>
+<p data-field="status">Not connected</p><p class="error" data-field="error"></p>
+<details><summary>Observation and prediction</summary><pre data-field="result"></pre></details>
+</template>
+</main><script src="/controller.js"></script></body></html>

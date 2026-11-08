@@ -1,9 +1,11 @@
 """One station page: independent arm servers and assignable SO-101 leader control."""
 
 import argparse
+import copy
 import json
 import os
 import pathlib
+import queue
 import signal
 import subprocess
 import sys
@@ -194,6 +196,45 @@ class UnifiedController:
         self.callers = callers or {}
         self.inputs = {side: "so101" if leader.side == side else None for side in nodes}
         self.input_lock = threading.RLock()
+        self.combined_input = None
+        self.shared_lock = threading.RLock()
+        self.listeners = set()
+        self.draft_revision = 0
+        self.api_drafts = {
+            side: {"task": "", "checkpoint": "dreamlabs/dream-1-beta", "revision": 0}
+            for side in ("left", "right", "both")
+        }
+
+    def shared_state(self):
+        with self.shared_lock:
+            return {"api_drafts": copy.deepcopy(self.api_drafts), "draft_revision": self.draft_revision}
+
+    def publish(self, event):
+        with self.shared_lock:
+            for listener in self.listeners:
+                listener.put(event)
+
+    def update_draft(self, selection, values):
+        if selection not in self.api_drafts:
+            raise ValueError("Choose left, right, or both for the API")
+        fields = {key: values[key] for key in ("task", "checkpoint") if key in values}
+        if any(not isinstance(value, str) for value in fields.values()):
+            raise ValueError("Task and checkpoint must be text")
+        with self.shared_lock:
+            self.draft_revision += 1
+            self.api_drafts[selection].update(fields, revision=self.draft_revision)
+            event = dict(
+                type="draft",
+                selection=selection,
+                fields=fields,
+                revision=self.draft_revision,
+                client_id=values.get("client_id", ""),
+            )
+            self.publish(event)
+            return event
+
+    def publish_selection(self):
+        self.publish({"type": "selection", "inputs": dict(self.inputs), "combined_input": self.combined_input})
 
     def state(self):
         state = self.leader.state()
@@ -201,6 +242,8 @@ class UnifiedController:
         state["arms"] = {side: node.snapshot() for side, node in self.nodes.items()}
         state["dream"] = {side: caller.snapshot() for side, caller in self.callers.items()}
         state["inputs"] = dict(self.inputs)
+        state["combined_input"] = self.combined_input
+        state.update(self.shared_state())
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
             state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]
@@ -222,7 +265,12 @@ class UnifiedController:
         if side not in self.nodes or source not in (None, "so101", "dream"):
             raise ValueError("Choose SO-101, Dream API, or no input for an arm")
         with self.input_lock:
+            if self.combined_input is not None:
+                self.pause(list(self.nodes))
+                self.combined_input = None
+                self.inputs = dict.fromkeys(self.nodes)
             if self.inputs[side] == source:
+                self.publish_selection()
                 return self.state()
             self.pause([side])
             if source == "so101":
@@ -234,6 +282,21 @@ class UnifiedController:
             elif self.leader.side == side:
                 self.leader.select(None)
             self.inputs[side] = source
+            self.publish_selection()
+            return self.state()
+
+    def select_both(self, source):
+        if source not in (None, "dream"):
+            raise ValueError("Both supports Dream API; Full Auto Control is not available yet")
+        with self.input_lock:
+            if source == self.combined_input:
+                return self.state()
+            self.pause(list(self.nodes))
+            if self.leader.side is not None:
+                self.leader.select(None)
+            self.inputs = dict.fromkeys(self.nodes)
+            self.combined_input = source
+            self.publish_selection()
             return self.state()
 
     def arm_home(self, side):
@@ -266,7 +329,7 @@ class UnifiedController:
             if action == "stop":
                 caller.cancel_playback()
                 for side in caller.sides:
-                    if self.inputs[side] == "dream":
+                    if self.inputs[side] == "dream" or self.combined_input == "dream":
                         node = self.nodes[side]
                         if node.snapshot()["arm_open"]:
                             node.control.post("/stop", {})
@@ -274,14 +337,23 @@ class UnifiedController:
                 caller.connect()
             elif action in ("call", "run"):
                 if action == "run":
-                    if any(self.inputs[side] != "dream" for side in caller.sides):
+                    selected = (
+                        self.combined_input == "dream"
+                        if selection == "both"
+                        else (self.combined_input is None and self.inputs[selection] == "dream")
+                    )
+                    if not selected:
                         raise ValueError("Select Dream API as the input on each arm you want to run")
                     for other in self.callers.values():
                         if other is not caller and set(other.sides).intersection(caller.sides):
                             other.cancel_playback()
                     for side in caller.sides:
                         self.nodes[side].cancel_home()
-                caller.start(body, run=action == "run")
+                if "task" in body or "checkpoint" in body:
+                    self.update_draft(selection, body)
+                with self.shared_lock:
+                    values = dict(self.api_drafts[selection])
+                caller.start(values, run=action == "run")
             else:
                 raise ValueError("Unknown Dream API action")
 
@@ -308,6 +380,7 @@ class UnifiedPage:
     def __init__(self, controller, port=8081):
         self.controller = controller
         owner = self
+        self.closed = threading.Event()
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_args):
@@ -324,8 +397,41 @@ class UnifiedPage:
             def do_GET(self):  # noqa: N802
                 if self.path == "/":
                     self.reply(200, PAGE.encode(), "text/html; charset=utf-8")
+                elif self.path == "/controller.js":
+                    self.reply(
+                        200,
+                        pathlib.Path(__file__).with_name("unified_control.js").read_bytes(),
+                        "text/javascript; charset=utf-8",
+                    )
                 elif self.path == "/api/state":
                     self.reply(200, json.dumps(controller.state()).encode())
+                elif self.path == "/api/events":
+                    listener = queue.Queue()
+                    with controller.shared_lock:
+                        controller.listeners.add(listener)
+                        listener.put({"type": "drafts", **controller.shared_state()})
+                    try:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                        while not owner.closed.is_set():
+                            try:
+                                event = listener.get(timeout=15)
+                            except queue.Empty:
+                                event = None
+                            data = (
+                                b": keepalive\n\n"
+                                if event is None
+                                else ("data: " + json.dumps(event) + "\n\n").encode()
+                            )
+                            self.wfile.write(data)
+                            self.wfile.flush()
+                    except (OSError, ConnectionError):
+                        pass
+                    finally:
+                        with controller.shared_lock:
+                            controller.listeners.discard(listener)
                 elif self.path.startswith("/api/camera/"):
                     role = self.path.rsplit("/", 1)[-1].split(".")[0]
                     side = "left" if role in ("left", "overhead") else "right"
@@ -353,6 +459,8 @@ class UnifiedPage:
                             controller.select_input(side, "so101")
                         elif controller.leader.side is not None:
                             controller.select_input(controller.leader.side, None)
+                    elif self.path == "/api/both/input":
+                        controller.select_both(body.get("source"))
                     elif self.path.startswith("/api/arms/") and self.path.endswith("/input"):
                         controller.select_input(self.path.split("/")[3], body.get("source"))
                     elif self.path.startswith("/api/arms/") and self.path.endswith("/grip-torque"):
@@ -369,6 +477,10 @@ class UnifiedPage:
                         parts = self.path.strip("/").split("/")
                         if len(parts) != 4 or parts[2] not in controller.callers:
                             raise ValueError("Choose left, right, or both for the API")
+                        if parts[3] == "draft":
+                            event = controller.update_draft(parts[2], body)
+                            self.reply(200, json.dumps(event).encode())
+                            return
                         controller.dream_action(parts[2], parts[3], body)
                     elif self.path in ("/api/arms/left/power", "/api/arms/right/power"):
                         controller.power(self.path.split("/")[3], body.get("enabled"))
@@ -392,11 +504,14 @@ class UnifiedPage:
                     self.reply(500, json.dumps({"error": str(error)}).encode())
 
         self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.server.daemon_threads = True
         self.port = self.server.server_port
         self.thread = threading.Thread(target=owner.server.serve_forever, name="unified-page", daemon=True)
         self.thread.start()
 
     def close(self):
+        self.closed.set()
+        self.controller.publish(None)
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
