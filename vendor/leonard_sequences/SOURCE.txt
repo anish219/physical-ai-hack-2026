@@ -1,0 +1,16 @@
+Original Leonard sequences editor and observation/Dream bridge.
+Copied from NUCK-1, /home/pah/leonard-dashboard, on 2026-11-07.
+Source bytes are retained; AppleDouble sidecar files are excluded.
+
+The original service on 127.0.0.1:8094 remains separate and is not exposed by
+the unified controller page. The preserved standalone launcher is:
+  ~/dream-env/bin/python vendor/leonard_sequences/bridge/server.py --existing --port 8094
+Run it only when that listener is free; no new legacy service is started by
+the unified controller.
+
+The unified Sequences input preserves the ordered phase/subphase format and
+timed Dream/wait semantics. It extends Dream playback to left, right and both
+through the existing arm/API workers, with their existing camera/state contract,
+gripper settings and direct target transport. Definitions are server-side and
+shared, and an active run uses the definition captured when Run was pressed.
+The original right-only bridge and browser-local editor remain available here.
