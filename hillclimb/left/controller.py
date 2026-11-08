@@ -16,6 +16,7 @@ import dataclasses
 import importlib
 import json
 import math
+import os
 import pathlib
 import threading
 import time
@@ -108,11 +109,24 @@ class LeftController:
             self.settings = new
             self.go_wall, self.tower, self.stage2_passed, self.estop = None, [], False, False
             self.faults, self.last_step, self._prepared = 0, {}, False
+            self._gate_file(False)
             self._set("IDLE", "armed")
             self.backend = self._make_backend()
             self.log.write("arm", settings=dataclasses.asdict(new))
             self._save(force=True)
             return True, "armed"
+
+    def _gate_file(self, is_open: bool) -> None:
+        """The scripted runner holds its first pick until GATE_FILE exists: cleared at arm, written when the gate opens."""
+        path = os.environ.setdefault("GATE_FILE", os.path.join(os.path.dirname(self.state_file) or ".", "usb_gate_open"))
+        try:
+            if is_open:
+                with open(path, "w") as f:
+                    f.write(str(self.clock()))
+            elif os.path.exists(path):
+                os.remove(path)
+        except OSError as e:
+            self.log.write("gate_file_error", error=str(e))
 
     def go(self) -> tuple[bool, str]:
         with self.lock:
@@ -251,6 +265,7 @@ class LeftController:
                     self._prepared = True
                     self._start_job("prepare", lambda: self.backend.prepare(self._scene()))
                 elif self.gate_open():
+                    self._gate_file(True)
                     self._set("STACK", "gate open")
             elif st in ("STACK", "FREEZE"):
                 if tl <= s.freeze_s:

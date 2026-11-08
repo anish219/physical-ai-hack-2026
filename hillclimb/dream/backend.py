@@ -35,7 +35,7 @@ TABLE_Z = -0.008
 
 class DreamBackend:
     def __init__(self, arm, checkpoint: str = DEFAULT_CHECKPOINT, *, wording: str = "", hz: float = 20.0,
-                 keep_out: bool = True, tower_xy=None, log_dir: str | None = None, client_factory=None) -> None:
+                 keep_out: bool = True, tower_xy=None, playback: str = "row0", log_dir: str | None = None, client_factory=None) -> None:
         self.arm = arm if isinstance(arm, Arm) else (Arm.from_url(arm) if isinstance(arm, str) else Arm(arm))
         self.checkpoint = checkpoint
         self.table = wording or table_for(checkpoint)
@@ -44,7 +44,7 @@ class DreamBackend:
         self.column: G.Column | None = None
         self.log = JsonlLog("dream", log_dir)
         kw = {"client_factory": client_factory} if client_factory else {}
-        self.loop = DreamLoop(self.arm, checkpoint, hz=hz, log=lambda rec: self.log.write(rec.pop("ev", "loop"), **rec), **kw)
+        self.loop = DreamLoop(self.arm, checkpoint, hz=hz, playback=playback, log=lambda rec: self.log.write(rec.pop("ev", "loop"), **rec), **kw)
         self.loop.row_filter = self._row_ok
 
     # ---------------------------------------------------------------- the interface
@@ -128,7 +128,9 @@ class DreamBackend:
 
     def _choose(self, scene: dict, n: int):
         if scene.get("loose") and scene.get("top"):
-            return prompt_from_positions(scene["loose"], scene["top"], self.table)
+            geo = G.geometry()
+            hand = tuple(geo.fk_command(G.START_Q)[0][:2]) if geo else (0.277, 0.0)
+            return prompt_from_positions(scene["loose"], scene["top"], self.table, hand)
         frames = {}
         for name in ("overhead", "wrist"):
             try:

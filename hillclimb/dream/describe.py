@@ -44,7 +44,8 @@ def read_scene(frames: dict, height: int, table: str) -> dict | None:
 def prompt_from_read(read: dict, table: str, tower_height: int) -> tuple[str, dict] | None:
     """The first nameable loose block (colours B misses most go last), formatted with the table's strings."""
     t = TABLES[table]
-    order = sorted(read["loose"], key=lambda b: b["colour"] in AVOID)
+    top_c = read["top"]["colour"]
+    order = sorted(read["loose"], key=lambda b: (b["colour"] == top_c, b["colour"] in AVOID))
     for b in order:
         x = f"{b['colour']} block"
         if b["lying"] and t["lying"]:
@@ -66,9 +67,13 @@ def prompt_from_read(read: dict, table: str, tower_height: int) -> tuple[str, di
     return None
 
 
-def prompt_from_positions(loose: list[dict], top: dict, table: str) -> tuple[str, dict] | None:
-    """When the scene carries positions (sim tests, or a perception that provides them)."""
-    order = sorted(loose, key=lambda b: b["colour"] in AVOID)
+def prompt_from_positions(loose: list[dict], top: dict, table: str, hand_xy=(0.277, 0.0)) -> tuple[str, dict] | None:
+    """When the scene carries positions (sim tests, or a perception that provides them). Order: never the top's
+    colour (same-colour stacks confuse naming and checks), then colours B misses most last, then nearest the start
+    pose's hand."""
+    import math  # noqa: PLC0415
+    cands = [b for b in loose if b["colour"] != top.get("colour")] or list(loose)
+    order = sorted(cands, key=lambda b: (b["colour"] in AVOID, math.hypot(b["x"] - hand_xy[0], b["y"] - hand_xy[1])))
     for b in order:
         p = stack_prompt(b, top, loose, table)
         if p:

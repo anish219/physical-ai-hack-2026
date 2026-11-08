@@ -43,9 +43,10 @@ def _jpeg(img: np.ndarray) -> bytes:
 
 class DreamLoop:
     def __init__(self, arm: Arm, checkpoint: str, *, hz: float = 20.0, obs_hz: float = 10.0,
-                 width: int = 320, height: int = 180, log: Callable[[dict], None] | None = None,
+                 width: int = 320, height: int = 180, playback: str = "row0", log: Callable[[dict], None] | None = None,
                  client_factory: Callable[[str, float], object] | None = None) -> None:
         self.arm, self.checkpoint, self.hz, self.obs_hz = arm, checkpoint, hz, obs_hz
+        self.playback = playback  # row0: each chunk from its first row (as in the experiments); due: from the row due now
         self.width, self.height = width, height
         self.log = log or (lambda rec: None)
         self.client_factory = client_factory or open_client
@@ -249,14 +250,17 @@ class DreamLoop:
                 self.stop_all.wait(0.2)
                 continue
             if self.running:
-                need = self.next_rows is None and (self.chunk is None or self._remaining() <= int(self.hz * PREFETCH_S))
+                need = self.next_rows is None and (self.chunk is None or self._remaining() <= int(self.hz * (1.2 if self.playback == "due" else PREFETCH_S)))
                 if not need:
                     self.stop_all.wait(0.03)
                     continue
+                t_req = time.monotonic()
                 rows = self._call()
                 if rows is not None and self.running:
                     with self.lock:
-                        if self.chunk is None:
+                        if self.playback == "due":
+                            self.chunk, self.next_rows = (t_req, rows), None
+                        elif self.chunk is None:
                             self.chunk = (time.monotonic(), rows)
                         else:
                             self.next_rows = rows
