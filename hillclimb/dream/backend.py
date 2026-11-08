@@ -110,7 +110,7 @@ class DreamBackend:
             res["timing"] = ev
             released = ev.get("why") == "released"
             res["ok"] = released
-            res["grew"] = released and ev.get("released_in_column", True)
+            res["grew"] = bool(released and ev.get("released_in_column", True))
             res["why"] = ev.get("why", "")
             if released and ev.get("release_xy") and not self.tower_xy and ev.get("released_in_column", True):
                 self.tower_xy = tuple(ev["release_xy"])  # learned: where the first good place happened
@@ -190,8 +190,8 @@ class DreamBackend:
                     p, R = geo.fk_measured(st["q"])
                     ev["release_xy"] = [round(float(p[0]), 4), round(float(p[1]), 4)]
                     if self.column is not None:
-                        ev["released_in_column"] = bool(self.column.hand_inside(geo, p, R)) or (
-                            abs(p[0] - self.column.x) < 0.05 and abs(p[1] - self.column.y) < 0.05)
+                        ev["released_in_column"] = bool(self.column.hand_inside(geo, p, R) or (
+                            abs(float(p[0]) - self.column.x) < 0.05 and abs(float(p[1]) - self.column.y) < 0.05))
             if let_go is not None and t - let_go >= AFTER_RELEASE_S:
                 ev["why"] = "released"
                 break

@@ -62,6 +62,19 @@ def scaled(jpeg: bytes, width: int = 640) -> bytes | None:
     return zoom(jpeg, [0, 0, 1, 1], width)
 
 
+def preview(jpeg: bytes, box_in_use, suggestion=None) -> bytes | None:
+    """The overhead frame with the crop in use (green) and a suggested crop (orange) drawn on it."""
+    img = decode(jpeg)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    for b, colour in ((box_in_use, (0, 200, 0)), (suggestion, (0, 140, 255))):
+        if b:
+            x0, y0, x1, y1 = clamp_box(b)
+            cv2.rectangle(img, (int(x0 * w), int(y0 * h)), (int(x1 * w), int(y1 * h)), colour, 2)
+    return encode(img)
+
+
 def find_strip(jpeg: bytes) -> dict:
     """Finds the black power strip on the pale table and returns a crop box around it with room for the cables.
 
@@ -91,10 +104,18 @@ def find_strip(jpeg: bytes) -> dict:
             fill = area / float(bw * bh)
             if elong < 1.8 or fill < 0.35:
                 continue
-            # surrounded by table: the strip lies on the table, unlike arm parts at the frame edge
-            pad = 6
-            ring = table[max(0, y - pad):min(h, y + bh + pad), max(0, x - pad):min(w, x + bw + pad)]
-            around = float(ring.mean()) if ring.size else 0.0
+            # the strip lies inside the table: anything touching the frame edge (arms, laptops, people) is not it
+            if x <= 1 or y <= top + 1 or x + bw >= w - 2 or y + bh >= h - 2:
+                continue
+            # and it is mostly surrounded by table: count table pixels in a ring around the box, not inside it
+            pad = max(6, int(0.02 * w))
+            y0, y1, x0, x1 = max(0, y - pad), min(h, y + bh + pad), max(0, x - pad), min(w, x + bw + pad)
+            outer = table[y0:y1, x0:x1].astype(np.float32)
+            inner = table[y:y + bh, x:x + bw].astype(np.float32)
+            ring_px = outer.size - inner.size
+            around = float(outer.sum() - inner.sum()) / ring_px if ring_px > 0 else 0.0
+            if around < 0.45:
+                continue
             score = around * min(elong, 6.0) * fill
             if score > best_score:
                 best, best_score = (x, y, bw, bh), score

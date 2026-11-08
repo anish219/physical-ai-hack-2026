@@ -51,15 +51,16 @@ def build(sim, height):
 
 
 def scene_from_truth(b):
+    """The scene in the controller's shape plus positions (the controller itself sends only tower_blocks; with no
+    positions the backend asks Terra)."""
     tw = _tower(b)
     top_id, top = tw[-1]
     colour = lambda k: k.split("#")[0]  # noqa: E731
     loose = [{"id": k, "colour": colour(k), "x": v["x"], "y": v["y"], "level": 0, "lying": not v["flat"]}
              for k, v in b.items() if v["on_table"] and v["stack_level"] == 0 and k in LOOSE
              and not any(o["on"] == k for o in b.values())]
-    return {"tower": {"x": top["x"], "y": top["y"], "top_z": top["z"] + 0.0175, "height": len(tw),
-                      "top": {"id": top_id, "colour": colour(top_id), "x": top["x"], "y": top["y"]}},
-            "loose": loose, "tower_count": 1 if len(tw) >= 2 else 0}
+    return {"tower_blocks": len(tw), "tower_xy": [top["x"], top["y"]],
+            "top": {"id": top_id, "colour": colour(top_id), "x": top["x"], "y": top["y"]}, "loose": loose}
 
 
 def main():
@@ -71,6 +72,8 @@ def main():
     ap.add_argument("--deadline", type=float, default=75.0)
     ap.add_argument("--idle", type=float, default=120.0)
     ap.add_argument("--warm-timeout", type=float, default=1200.0)
+    ap.add_argument("--terra", action="store_true", help="give no positions: the backend reads the scene with Terra")
+    ap.add_argument("--steps", default="", help="comma list like level1,level1,level2,missed (overrides what)")
     a = ap.parse_args()
     out = pathlib.Path.home() / "hspike" / "R" / "out"
     out.mkdir(parents=True, exist_ok=True)
@@ -83,7 +86,9 @@ def main():
     if not ok:
         be.loop.close()
         return
-    if a.what == "all":
+    if a.steps:
+        steps = [(x.rstrip("0123456789"), int(x[len(x.rstrip("0123456789")):] or 0)) for x in a.steps.split(",")]
+    elif a.what == "all":
         steps = [("warm", 0)] + [("level", n) for n in (1, 1, 2, 2)] + [("missed", 2)]
     else:
         steps = [(a.what, a.n)]
@@ -100,13 +105,15 @@ def main():
         b0 = _truth(a.sim)
         scene = scene_from_truth(b0)
         r0, f0 = be.loop.status["rows_sent"], be.loop.status["rows_refused"]
+        if a.terra:
+            scene = {"tower_blocks": scene["tower_blocks"], "tower_xy": scene["tower_xy"]}
         res = be.place_next(scene, deadline_s=8.0 if what == "missed" else a.deadline)
         time.sleep(1.0)
         b1 = _truth(a.sim)
         h0, h1 = len(_tower(b0)), len(_tower(b1))
         stood = {k: round(math.hypot(b1[k]["x"] - b0[k]["x"], b1[k]["y"] - b0[k]["y"]) * 1000) for k, _ in _tower(b0)}
         standing = all(v["tilt_deg"] < 10 for _, v in _tower(b1))
-        print("RESULT " + json.dumps({"what": what, "n": n, "result": {k: res[k] for k in ("ok", "placed_id", "prompt", "why")},
+        print("RESULT " + json.dumps({"what": what, "n": n, "result": {k: res.get(k) for k in ("ok", "grew", "verified", "placed_id", "prompt", "why")},
                                       "timing": res["timing"], "tower_before": h0, "tower_after": h1,
                                       "grew_by_one_and_stands": h1 == h0 + 1 and standing,
                                       "tower_blocks_moved_mm": stood, "rows_sent": be.loop.status["rows_sent"] - r0,

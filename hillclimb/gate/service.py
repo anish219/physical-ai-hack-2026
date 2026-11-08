@@ -132,12 +132,21 @@ class Gate:
         f = self.source.latest()
         if f is None:
             return {"ok": False, "why": "no overhead frame"}
+        # The automatic finder is only a suggestion (right on 2 of 10 recorded frames): it is applied only when the
+        # caller asks with "apply": true, after looking at the preview. A wrong crop keeps the gate shut, never opens it.
         found = imaging.find_strip(f.jpeg)
-        if found.get("ok"):
+        if found.get("ok") and body.get("apply"):
             self.strip_box = found["box"]
             settings.set_override("STRIP_BOX", self.strip_box)
-        log.event("gate_calibrated", mode="auto", result=found)
-        return {"mode": "auto", **found, "box_in_use": self.strip_box}
+        preview = imaging.preview(f.jpeg, self.strip_box, found.get("box") if found.get("ok") else None)
+        path = settings.log_dir() / "gate_strip_preview.jpg"
+        try:
+            path.write_bytes(preview or b"")
+        except Exception:  # noqa: BLE001
+            path = None
+        log.event("gate_calibrated", mode="auto", result=found, applied=bool(found.get("ok") and body.get("apply")))
+        return {"mode": "auto", **found, "applied": bool(found.get("ok") and body.get("apply")), "box_in_use": self.strip_box,
+                "preview": str(path) if path else None, "note": "green: box in use, orange: suggestion"}
 
     # ------------------------------------------------------------------ loop
     def _healthy(self) -> bool:
