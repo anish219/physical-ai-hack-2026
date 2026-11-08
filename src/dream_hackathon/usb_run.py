@@ -17,11 +17,12 @@ from dream_hackathon.usb_insertion import InsertionVision, execute
 class ControllerAPI:
     """Reuse the existing right-only Dream worker and its configured credentials."""
 
-    def __init__(self, url, poll_seconds=0.1):
+    def __init__(self, url, poll_seconds=0.1, *, policy_url=None, keep_input=False):
         self.url, self.poll_seconds = url.rstrip('/'), poll_seconds
+        self.policy_url, self.keep_input = policy_url, keep_input
 
-    def request(self, path, body=None):
-        request = urllib.request.Request(self.url + path,
+    def request(self, path, body=None, *, base=None):
+        request = urllib.request.Request((base or self.url).rstrip('/') + path,
                                          data=None if body is None else json.dumps(body).encode(),
                                          headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(request) as response:
@@ -31,23 +32,34 @@ class ControllerAPI:
         return self.request('/api/state')
 
     def select(self):
-        self.request('/api/arms/right/input', {'source': 'dream'})
+        if not self.keep_input:
+            self.request('/api/arms/right/input', {'source': 'dream'})
+
+    def policy(self, action, body=None):
+        if self.policy_url:
+            return self.request('/api/right/' + action, body, base=self.policy_url)
+        return self.request('/api/dream/right/' + action, body)
+
+    def policy_state(self):
+        if self.policy_url:
+            return self.policy('state')
+        return self.state()['dream']['right']
 
     def stop(self):
-        self.request('/api/dream/right/stop', {})
-        while self.state()['dream']['right']['busy']:
+        self.policy('stop', {})
+        while self.policy_state()['busy']:
             time.sleep(self.poll_seconds)
 
     def start(self, task, checkpoint):
-        self.request('/api/dream/right/connect', {})
+        self.policy('connect', {})
         while True:
-            state = self.state()['dream']['right']
+            state = self.policy_state()
             if state.get('observation_error'):
                 raise RuntimeError(state['observation_error'])
             if state.get('observation') is not None:
                 break
             time.sleep(self.poll_seconds)
-        self.request('/api/dream/right/run', {'task': task, 'checkpoint': checkpoint})
+        self.policy('run', {'task': task, 'checkpoint': checkpoint})
 
 
 def run(backend, arm, vision, plan, kinematics, settings, report, *, sleep=time.sleep, align_only=False):
@@ -116,6 +128,9 @@ def main(argv=None):
     parser.add_argument('--start-grip', type=float)
     parser.add_argument('--task')
     parser.add_argument('--checkpoint')
+    parser.add_argument('--script-input', action='store_true',
+                        help='Keep Script selected; use the direct Dream worker')
+    parser.add_argument('--policy-url', default='http://127.0.0.1:8084')
     parser.add_argument('--align-only', action='store_true')
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--output', type=pathlib.Path)
@@ -147,7 +162,9 @@ def main(argv=None):
         if image is not None:
             cv2.imwrite(str(output / 'alignment.jpg'), image)
 
-    result = run(ControllerAPI(settings['controller_url'], settings['poll_seconds']),
+    result = run(ControllerAPI(settings['controller_url'], settings['poll_seconds'],
+                               policy_url=args.policy_url if args.script_input else None,
+                               keep_input=args.script_input),
                  HttpArm(settings['right_url']), vision, plan, kinematics, settings, report,
                  align_only=args.align_only)
     (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

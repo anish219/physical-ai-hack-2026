@@ -141,3 +141,65 @@ def test_cli_emits_single_result_and_saves_it_without_direct_network_in_test(mon
     result = json.loads(capsys.readouterr().out)
     assert result['run_complete'] and result['api_stopped']
     assert json.loads((tmp_path / 'result.json').read_text()) == result
+
+
+def test_script_panel_mode_keeps_input_and_uses_direct_right_worker(monkeypatch):
+    requests = []
+    replies = iter([{}, {'observation': {}}, {}, {}, {'busy': False}])
+
+    def request(value):
+        requests.append(value.full_url)
+        return io.BytesIO(json.dumps(next(replies)).encode())
+
+    monkeypatch.setattr(usb_run.urllib.request, 'urlopen', request)
+    api = usb_run.ControllerAPI('http://controller', policy_url='http://worker', keep_input=True)
+    api.select()
+    assert not requests
+    api.start('grab', 'trained')
+    api.stop()
+    assert requests == ['http://worker/api/right/connect', 'http://worker/api/right/state',
+                        'http://worker/api/right/run', 'http://worker/api/right/stop',
+                        'http://worker/api/right/state']
+
+
+def test_panel_adapter_honors_stop_and_reports_child_completion(monkeypatch):
+    import importlib.util
+    import threading
+
+    spec = importlib.util.spec_from_file_location('panel_adapter_test', ROOT / 'scripts/usb_insertion_controller.py')
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+    calls = []
+
+    class Process:
+        def __init__(self):
+            self.ended = threading.Event()
+
+        def poll(self):
+            return 130 if self.ended.is_set() else None
+
+        def wait(self):
+            self.ended.wait()
+            return 130
+
+        def send_signal(self, value):
+            calls.append(value)
+            self.ended.set()
+
+    process = Process()
+
+    def spawn(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return process
+
+    monkeypatch.setattr(adapter.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(pathlib.Path, 'open', lambda *args, **kwargs: io.BytesIO())
+    cancel = threading.Event()
+    handle = adapter.start({'selection': 'right', 'cancel': cancel})
+    assert '--script-input' in calls[0][0]
+    assert calls[0][1]['cwd'] == adapter.RUN_ROOT
+    assert not cancel.is_set()
+    handle.stop()
+    handle.finished.join(2)
+    assert cancel.is_set()
+    assert calls[1] == adapter.signal.SIGINT

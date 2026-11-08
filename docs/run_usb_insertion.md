@@ -4,6 +4,25 @@ Entry point: `scripts/run_usb_insertion.py`, or `python -m dream_hackathon.usb_r
 This coordinates one complete attempt using the existing right-arm server and
 Dream API backend. It does not require an open browser.
 
+## Controller Script input
+
+In the Right arm **Script** panel, use:
+
+```text
+scripts/usb_insertion_controller.py:start
+```
+
+The adapter is installed inside the live NUC project so the loader accepts it.
+It starts the isolated coordinator copy with `--script-input`, which keeps Script
+selected and calls the existing Dream worker at `127.0.0.1:8084` directly. This
+avoids switching its own panel back to Dream and canceling the run. Panel Stop
+interrupts the child; child completion ends this one Script attempt. The log is
+`/tmp/usb-insertion-controller.log`. Loading the file alone does not start motion.
+The direct worker URL can be overridden with `--policy-url` when calling the
+coordinator directly.
+
+## Command line
+
 From a checkout of **`codex/scripted-usb-insertion`** with the station configuration:
 
 ```bash
