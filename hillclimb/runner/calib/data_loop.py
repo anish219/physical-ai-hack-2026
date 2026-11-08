@@ -28,6 +28,7 @@ import http.client
 import itertools
 import json
 import math
+import os
 import pathlib
 import queue
 import shutil
@@ -47,7 +48,7 @@ from hillclimb.runner.calib.opstack import (CARRY_Z, GRIP_TIP, LOOK_TIP, PICK_DO
 from hillclimb.runner.calib.tower_plan import FACE, H, WORKSPACE, Shape, frame_down
 
 ROOT = O.ROOT
-_RUNS_ROOT = pathlib.Path(__import__("os").environ.get("HILLCLIMB_RUNS", str(pathlib.Path.home() / "hillclimb_runs")))
+_RUNS_ROOT = pathlib.Path(os.environ.get("HILLCLIMB_RUNS", str(pathlib.Path.home() / "hillclimb_runs")))
 STATION = _RUNS_ROOT / "station"
 TOKEN = STATION / "ARM_OWNER"
 LOOP = STATION / "loop"
@@ -113,6 +114,7 @@ if "TowerFell" not in globals():  # kept across a hot reload
 
 def status(line):
     msg = f"{time.strftime('%H:%M:%S')} {line}"
+    STATUS.parent.mkdir(parents=True, exist_ok=True)  # a fresh run root (HILLCLIMB_RUNS) has no folders yet
     with open(STATUS, "a") as fh:
         fh.write(msg + "\n")
     print(msg, flush=True)
@@ -120,7 +122,7 @@ def status(line):
 
 def recording():
     """HILLCLIMB_RECORD=1: episodes go to the recorder (REC); anything else (the match default): no recorder calls."""
-    return __import__("os").environ.get("HILLCLIMB_RECORD", "0") == "1"
+    return os.environ.get("HILLCLIMB_RECORD", "0") == "1"
 
 
 def rec(path, **q):
@@ -148,6 +150,7 @@ def jdump(v):
 
 
 def take_token():
+    TOKEN.parent.mkdir(parents=True, exist_ok=True)  # the lock is TOKEN itself; its folder may not exist yet
     while True:
         try:
             TOKEN.mkdir()
@@ -174,6 +177,11 @@ def arm_state_retry(tries=20):
 # streamed joint speeds (rad/s): high up, lowering, the last 3 cm and the set-down (Nov 7 20:40: 1.5x the 18:45
 # values; the server's walk caps every goal at 0.6 rad/s, opstack.stream)
 V_HIGH, V_DOWN, V_LAST, V_SET = 0.6, 0.45, 0.3, 0.09
+# the carry over a support's top: 8 cm where the reach allows (5 cm before Nov 8 11:20: a held block hangs 1.5-4 cm
+# under the fingertips, so 5 cm left 1-3 cm over a tall tower's top edge)
+SUP_CLEAR = 0.08
+# the 2x pick (PICK_FAST) only for a block at least this far from every stack (fingertips stray 5-9 mm at speed)
+FAST_CLEAR = 0.15
 REACH_Z = 0.238  # highest legal fingertip height, fingers down (Kin + TowerSafety sweep, x 16-38 cm)
 LOOK_MAX_Z = 0.22  # close looks from 6.5 cm back stop here (the camera rule tightens near the reach limit)
 
@@ -819,6 +827,11 @@ class Loop:
             v, info, tab = self.standing_twice(sup, b, frame, under=self.under(sup))
             if v == "fallen":
                 raise TowerFell(f"{sup} is not standing at {bot(b) * 1000:.0f} mm: {info['why']}", sup, tab)
+            if v != "standing" and b.get("confirmed"):
+                # a stack confirmed standing from outside (world_override.json: a person or the overhead picture saw it):
+                # an unclear check does not stop the run (Nov 8 11:27: green on pink plainly standing, green's fits weak)
+                status(f"support check {sup}: unclear ({info['why'][:120]}), but confirmed standing in world_override.json; going on")
+                v = "standing"
             if v != "standing":
                 raise Fatal(f"cannot tell whether {sup} stands at {bot(b) * 1000:.0f} mm from two frames ({info['why']}): "
                             "stopped so nothing goes on it")
@@ -1182,7 +1195,7 @@ class Loop:
         # carry high enough that the held block clears the stack it goes onto, inside the arm's reach
         src_top = top_of(self.belief[colour]) if colour in self.belief else TABLE_Z
         # carry high enough that the held block clears the stack it goes onto and the one it came off, inside reach
-        self.dr = {"carry_z": round(min(max(float(self.rng.uniform(*CARRY)), sup_top + 0.05, src_top + 0.02), max(REACH_Z, sup_top + 0.035)), 4),
+        self.dr = {"carry_z": round(min(max(float(self.rng.uniform(*CARRY)), sup_top + SUP_CLEAR, src_top + 0.02), max(REACH_Z, sup_top + 0.035)), 4),
                    "over_dz": round(float(self.rng.uniform(0, 0.02)), 4)}
         if sup and not replace:
             # the block below, from a fresh frame: standing (or the place goes on what still stands), then measured at
@@ -1197,7 +1210,7 @@ class Loop:
                 sup, sb = new, self.belief[new]
                 tlevel = int(sb.get("level", round((bot(sb) - TABLE_Z) / H))) + 1
                 sup_top = top_of(sb)
-                self.dr["carry_z"] = round(min(max(self.dr["carry_z"], sup_top + 0.05), max(REACH_Z, sup_top + 0.035)), 4)
+                self.dr["carry_z"] = round(min(max(self.dr["carry_z"], sup_top + SUP_CLEAR), max(REACH_Z, sup_top + 0.035)), 4)
             tx, ty, tyaw = sb["x"], sb["y"], sb["yaw"]
             target = (tx, ty, tyaw, tlevel, sup)
         if not recovery:
@@ -1205,6 +1218,8 @@ class Loop:
             mark("re-look")
         src = dict(self.belief[colour])
         top = top_of(self.belief[sup]) if sup else TABLE_Z
+        from hillclimb.runner.calib import keepout as KO
+        KO.ACTIVE[:] = ([(src["x"], src["y"])] if bot(src) > TABLE_Z + 0.005 else []) + ([(tx, ty)] if sup else [])
         q0 = self.start_q()
         corr = self.correction(tlevel, tx, ty)  # aim off by the learned bias at this level and place (mm, arm frame)
         ax, ay = tx - corr[0] / 1000, ty - corr[1] / 1000
@@ -1218,6 +1233,11 @@ class Loop:
         T0 = now()
         mark("plan pick")
         t_wall = time.time()
+        pl.fast = float(os.environ.get("PICK_FAST", "1"))  # PICK_FAST=2: the pick's approach 2x (Isaiah, Nov 8 11:10)
+        stacks_xy = [(o["x"], o["y"]) for k, o in self.belief.items() if k != colour and bot(o) > TABLE_Z + 0.005]
+        if any(math.hypot(src["x"] - x_, src["y"] - y_) < FAST_CLEAR for x_, y_ in stacks_xy):
+            pl.fast = 1.0  # near a stack: the normal speed
+        self.dr["pick_fast"] = pl.fast
         self.go(pl, getattr(self, "pick_open", {}).get(colour, 0.8), "pick", "down")
         mark("pick stream")
         s = arm_state()
@@ -1229,6 +1249,9 @@ class Loop:
         grasp = {"run": self.dir.name, "block": colour, "grip": s["grip"], "tip_fk_mm": (tip_grasp * 1000).round(1),
                  "jaw_yaw_deg": round(yaw_grasp, 1), "wrist_look": src, "q_measured": s["q"], "cycle": cycle}
         prompt = f"pick up the {colour} block"
+        if s["grip"] >= GRIP_HELD and bot(src) > TABLE_Z + 0.005:
+            from hillclimb.runner.calib import keepout as KO
+            KO.remove_pick(src["x"], src["y"], bot(src), TABLE_Z)  # a block off a tower: its keep-out top drops
         if s["grip"] < GRIP_HELD:
             O.record("grasp_failed", **grasp)
             self.grip_to(s, 0.8)
@@ -1384,6 +1407,10 @@ class Loop:
         s = arm_state()
         self.release(s)
         op.held = None
+        if sup:  # a block set on another: the tower's keep-out cylinder from where the arm let go (measured joints)
+            from hillclimb.runner.calib import keepout as KO
+            tip_rel = op.tip(np.array(arm_state()["q"]) + op.dq)[0]
+            KO.add_place(float(tip_rel[0]), float(tip_rel[1]), top, hgt(src), TABLE_Z, note=f"{colour} on {sup}")
         self.held_ext = 0.0
         # where it was set, until the check photo measures it: the back-off and the check move clear it as a stack
         self.belief[colour] = dict(self.belief.get(colour, {}), x=tx, y=ty, yaw=tyaw, level=tlevel, z0=top,

@@ -10,6 +10,7 @@ The gate opens when GateCore says so, and stays open (latched) until the next /g
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import traceback
@@ -161,6 +162,11 @@ class Gate:
     def _loop(self) -> None:
         while not self._stop.is_set():
             started = time.time()
+            max_armed = float(os.environ.get("GATE_MAX_ARMED_S", "420"))  # a 5 min round plus margin: no reads after it
+            if self.core.armed and not self.core.open and self.core.armed_at and started - self.core.armed_at > max_armed:
+                self.core.armed = False
+                log.event("gate_auto_disarmed", after_s=round(started - self.core.armed_at))
+                self._save()
             try:
                 self._step()
             except Exception:  # noqa: BLE001  (the loop survives anything; the gate just stays shut)

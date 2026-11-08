@@ -10,6 +10,7 @@ motion. Recorded as one move episode.
 from __future__ import annotations
 
 import math
+import os
 import sys
 import time
 
@@ -62,7 +63,24 @@ def main():
     try:
         if not dry:
             D.rec("/start")
-        t.look_all("look-reach", move=not dry, vet=False)
+        if "--multi" in sys.argv:  # both far looks (LOOKS): the far blocks are out of the look pose's view (moves the arm, even --dry)
+            t.multi_look()
+        else:
+            t.look_all("look-reach", move=not dry, vet=False)
+        if "@" in bid:  # COLOUR@X_CM,Y_CM: that colour's block nearest there (ids are per look)
+            c, xy = bid.split("@")
+            px, py = (float(v) / 100 for v in xy.split(","))
+            cands = [k for k in t.belief if T.colour_of(k) == c and math.hypot(t.belief[k]["x"] - px, t.belief[k]["y"] - py) < 0.04]
+            if not cands and os.environ.get("SURVEY_YAW") is not None:
+                # not in this look (the keep-out refused the looks that see it): the first survey's fit (Nov 8 12:05)
+                t.belief[f"{c}#88"] = {"x": px, "y": py, "yaw": float(os.environ["SURVEY_YAW"]), "level": 0, "z0": T.TABLE_Z,
+                                       "lying": False, "iou": 0.9, "edge": False, "t_seen": time.time()}
+                t.put_blocks()
+                cands = [f"{c}#88"]
+            if not cands:
+                raise SystemExit(f"no {c} block within 4 cm of ({px * 100:.0f}, {py * 100:.0f}) in the look ({sorted(t.belief)})")
+            bid = min(cands, key=lambda k: math.hypot(t.belief[k]["x"] - px, t.belief[k]["y"] - py))
+            D.status(f"reach: {c} near ({px * 100:.0f}, {py * 100:.0f}) is {bid} at ({t.belief[bid]['x'] * 100:.1f}, {t.belief[bid]['y'] * 100:.1f})")
         b = t.belief[bid]
         psi = math.atan2(b["y"], b["x"])
         R = frame_tilt(theta, psi)
@@ -75,7 +93,9 @@ def main():
         # whose jaw axis is the tilted one's; then a joint blend into the tilted frame over the block (checked every 2 deg)
         pre = O.Plan(op, q0, 0.08)
         pre.R = O.frame_down(psi + math.pi / 2)
-        pre.to([cx - 0.06 * math.cos(psi), cy - 0.06 * math.sin(psi), z_grip + 0.08], math.degrees(psi) + 90, D.V_HIGH, "toward", keep=True)
+        # short of it by 6 cm, or more: fingers down 8 cm up reach only about 45 cm (Nov 8 11:05: blue at 52 cm refused)
+        back_by = max(0.06, math.hypot(cx, cy) - 0.42)
+        pre.to([cx - back_by * math.cos(psi), cy - back_by * math.sin(psi), z_grip + 0.08], math.degrees(psi) + 90, D.V_HIGH, "toward", keep=True)
         pre.check(skip=bid)
         t.sweep(pre, exempt={bid})
         pick = TiltPlan(op, pre.nodes[-1][0], 0.08)

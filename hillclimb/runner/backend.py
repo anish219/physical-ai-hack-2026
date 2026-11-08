@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import pathlib
 import time as _wall
 import traceback
 import urllib.request
@@ -70,6 +71,8 @@ class RunnerBackend:
 
     def _ensure_runner(self):
         if self.t is None:
+            for p in (D.TOKEN.parent, D.LOOP, T.TALL, O.RECORDS.parent):  # a fresh station has none of the run folders
+                pathlib.Path(p).mkdir(parents=True, exist_ok=True)
             if not D.TOKEN.exists():
                 D.take_token()
             self.t = T.Tall(T.TALL / _wall.strftime("%m%d-%H%M%S"))
@@ -93,12 +96,41 @@ class RunnerBackend:
         self.moves = list(moves)
         return len(self.moves)
 
+    FOLDED_REST = (0.0, -1.89, 1.73, -1.47, 0.0, 0.0)  # the left arm's power-on rest (Nov 7-8 logs), joints in rad
+
+    def _unfold_from_rest(self):
+        """From the folded rest, go to the look pose first through the runner's home rules (to_pose). The arm server's
+        start/zero joints can be anywhere after a reboot, so the unfold exception is given the present pose as the start,
+        only when the arm really sits in the folded rest. Every route and sweep check still applies."""
+        s = D.arm_state()
+        q = s.get("q") or []
+        if len(q) < 4 or max(abs(a - b) for a, b in zip(q[1:4], self.FOLDED_REST[1:4])) > 0.15:
+            return
+        real = D.arm_state
+
+        def with_start(*a, **k):
+            st = dict(real(*a, **k))
+            st["start_joints"] = list(q)
+            return st
+
+        D.arm_state = with_start
+        try:
+            if hasattr(T, "arm_state"):
+                T.arm_state, saved_t = with_start, T.arm_state
+            self.t.to_pose(T.LOOK_TIP, "look")
+            self._note(ok=True, what="unfold", why="folded rest to the look pose")
+        finally:
+            D.arm_state = real
+            if hasattr(T, "arm_state"):
+                T.arm_state = saved_t
+
     # ---- the interface
     def prepare(self, scene=None):
         """Looks and the whole plan; no block is touched (the runner's first pick or push also waits on GATE_FILE)."""
         try:
             self._ensure_runner()
             t = self.t
+            self._unfold_from_rest()
             t.multi_look(None)
             T.do_scatter_setup(t)
             t.tower_ids = set(sum(t.scatter_list, []))

@@ -36,7 +36,7 @@ from hillclimb.runner.calib.tower_plan import FACE, H, Shape, WristView, frame_d
 from hillclimb.runner.calib.data_loop import V_DOWN, V_HIGH, V_LAST, bot, hgt, shape_of, top_of
 
 ROOT = O.ROOT
-_RUNS_ROOT = pathlib.Path(__import__("os").environ.get("HILLCLIMB_RUNS", str(pathlib.Path.home() / "hillclimb_runs")))
+_RUNS_ROOT = pathlib.Path(os.environ.get("HILLCLIMB_RUNS", str(pathlib.Path.home() / "hillclimb_runs")))
 TALL = _RUNS_ROOT / "station" / "tall"
 LEARN = _RUNS_ROOT / "station" / "learn"
 # the looks that see the whole reachable table (x 15-50, y -30..30 cm) between them, by the wrist camera model
@@ -213,6 +213,21 @@ class AxisPlan(Plan):
 class Tall(D.Loop):
     relook_iou = 0.65  # blocks touching a neighbour fit about 0.7
     # ---- labels: prompts by colour, not id
+    def belief_overlay(self, tag):
+        """Every believed block drawn on the overhead frame (calib/belief_overlay.py); never stops the run."""
+        try:
+            from hillclimb.runner.calib import belief_overlay as BO
+            img = self.overhead_now()
+            if img is None:
+                return None
+            self.n_overlay = getattr(self, "n_overlay", 0) + 1
+            out = self.dir / "belief" / f"{self.n_overlay:02d}-{tag.replace(' ', '-').replace('#', '')}.jpg"
+            BO.draw(self.belief, img, out, f"{time.strftime('%H:%M:%S')} {tag}: where the runner thinks every block is")
+            return out
+        except Exception as e:  # noqa: BLE001
+            D.status(f"belief overlay failed: {type(e).__name__}: {e}")
+            return None
+
     def overhead_now(self):
         try:
             data, _, _ = O.fetch("overhead")
@@ -369,7 +384,13 @@ class Tall(D.Loop):
             self.speed_scale()
         try:
             out = super().block(colour, target, *a, **k)
+            if outer:
+                from hillclimb.runner.calib import keepout as KO
+                KO.ACTIVE.clear()  # the hand may enter a tower only inside the block that works on it
+                self.belief_overlay(f"after {colour}")
         except (D.CycleFail, SystemExit) as e:
+            from hillclimb.runner.calib import keepout as KO
+            KO.ACTIVE.clear()
             self.failure(colour, target, e)
             if outer and self.knock_check(colour, "failed move")[0]:
                 raise D.Fatal(f"a block that was not moved changed in the overhead during the failed {colour} move") from e
@@ -624,6 +645,17 @@ class Tall(D.Loop):
         vet of the weak green and purple fits; obstacles from every look. Ends at the standard look pose (its view is
         the one the spot visibility uses)."""
         poses = LOOKS if poses is None else poses
+        if not self.belief:
+            # the stacks the records say are standing go into the belief before the first look move, so every look
+            # move's plan check and sweep keeps clear of them (Nov 8 11:14: a look move at 19 cm through a 207 mm
+            # tower knocked it over: the belief was empty then and nothing was checked against it)
+            known = world_from_records()
+            up = {k: b for k, b in known.items() if bot(b) > TABLE_Z + 0.005}
+            under = {k: b for k, b in known.items() if k not in up and any(math.hypot(b["x"] - o["x"], b["y"] - o["y"]) < 0.03 for o in up.values())}
+            if up:
+                self.belief = {**under, **up}
+                self.put_blocks()
+                D.status(f"looks: {len(up) + len(under)} blocks of standing stacks from the records kept clear of: {sorted(self.belief)}")
         self.clear_up()
         sights, obst, frames = [], [], []
         for i, pose in enumerate(poses):
@@ -726,6 +758,7 @@ class Tall(D.Loop):
         """Optional second check of weak green or purple fits in one wrist frame. Off in this package: every fit kept."""
         return blocks
 
+    # ---- the cluster phase: piles taken apart top-down, touching blocks pushed apart
     def towers(self):
         """Centres (x, y) of everything standing two or more high (recorded stacks, piles), to keep clear of."""
         out = []
@@ -1117,7 +1150,9 @@ class Tall(D.Loop):
         tried = 0
         t_end = time.time() + float(os.environ.get("TOWER_SPOT_S", "10"))  # the arm waits while this runs (Nov 8: 3 s planned 2-4 of 5)
         area = D.AREA
-        D.AREA = getattr(self, "spot_area", ((0.18, 0.30), (-0.10, 0.15)))  # the reach is highest close in: the tower goes there
+        ta = os.environ.get("TOWER_AREA")  # "x0,x1,y0,y1" (m): the tower area for the loop's tall towers too (Nov 8 11:35)
+        dflt = ((float(ta.split(",")[0]), float(ta.split(",")[1])), (float(ta.split(",")[2]), float(ta.split(",")[3]))) if ta else ((0.18, 0.30), (-0.10, 0.15))
+        D.AREA = getattr(self, "spot_area", dflt)  # the reach is highest close in: the tower goes there
         for x, y, yaw in self.spot(None, list(range(levels)), avoid=[], gap=0.075):
             tried += 1
             got = self.plan_tower((x, y, yaw), order)
@@ -1134,7 +1169,7 @@ class Tall(D.Loop):
     def plan_level(self, bid, lvl, spot, sup, q):
         x, y, yaw = spot
         st = top_of(self.belief[sup]) if sup else TABLE_Z
-        self.dr = {"carry_z": min(max(0.15, st + 0.05), max(D.REACH_Z, st + 0.035)), "over_dz": 0.01}
+        self.dr = {"carry_z": min(max(0.15, st + D.SUP_CLEAR), max(D.REACH_Z, st + 0.035)), "over_dz": 0.01}
         self.op.st["target"] = q.tolist()
         pl = self.plan_pick(bid, q)
         lift = self.plan_lift(pl.nodes[-1][0], pl.R, math.degrees(self.belief[bid]["yaw"]), bid)
@@ -1360,9 +1395,10 @@ class Tall(D.Loop):
             b0 = self.belief[base[0]]
             cands.append(((b0["x"], b0["y"], b0["yaw"]), list(base), list(order)))
         else:
-            for k in order:  # a flat block on the table in the band, built on where it lies
+            (ax0, ax1), (ay0, ay1) = getattr(self, "spot_area", ((0.19, 0.29), (-0.12, 0.15)))
+            for k in order:  # a flat block on the table in the tower area, built on where it lies
                 b = self.belief[k]
-                if not b.get("lying") and abs(bot(b) - TABLE_Z) < 0.005 and 0.19 <= b["x"] <= 0.30 and -0.12 <= b["y"] <= 0.15 and self.free_top(k):
+                if not b.get("lying") and abs(bot(b) - TABLE_Z) < 0.005 and ax0 - 0.01 <= b["x"] <= ax1 + 0.01 and ay0 - 0.01 <= b["y"] <= ay1 + 0.01 and self.free_top(k):
                     cands.append(((b["x"], b["y"], b["yaw"]), [k], [o for o in order if o != k]))
             area = D.AREA
             D.AREA = getattr(self, "spot_area", ((0.19, 0.29), (-0.12, 0.15)))
@@ -1375,7 +1411,7 @@ class Tall(D.Loop):
                     break
             D.AREA = area
             cands += free
-            cands.sort(key=lambda c: math.hypot(c[0][0] - 0.24, c[0][1] - 0.03))
+            cands.sort(key=lambda c: math.hypot(c[0][0] - (ax0 + ax1) / 2, c[0][1] - (ay0 + ay1) / 2))
         best = None
         n_tried = 0
         for spot, b_, o_ in cands:
@@ -1527,8 +1563,13 @@ class Tall(D.Loop):
         return built
 
     def loop_look(self, avoid):
-        """A full look; blocks by the base (x under 15 cm) and the avoided piles stay in the belief as things in the way."""
-        self.look_all("look-loop")
+        """A full look; blocks by the base (x under 15 cm) and the avoided piles stay in the belief as things in the way.
+        LOOP_MULTI=1: the three close looks (LOOKS_OLD) merged, not the one look pose (Nov 8 11:34: one look saw 5 of 8)."""
+        if os.environ.get("LOOP_MULTI") == "1":
+            self.belief = {}
+            self.multi_look(LOOKS_OLD)
+        else:
+            self.look_all("look-loop")
         if not getattr(self, "seeded", False):
             self.seeded = True
             self.seed_levels()
@@ -1555,7 +1596,8 @@ class Tall(D.Loop):
     def pick_style(self):
         """This cycle's stacking style: tight (square on the block below, re-placed over 4 mm or 4 deg), aligned (the
         usual 8 mm, 10 deg) or rotated (each block turned 10 to 35 deg, either way, against the one below)."""
-        st = str(self.rng.choice(list(self.STYLES)))
+        allowed = [x for x in os.environ.get("LOOP_STYLES", ",".join(self.STYLES)).split(",") if x in self.STYLES]
+        st = str(self.rng.choice(allowed or list(self.STYLES)))  # LOOP_STYLES=tight,aligned: no rotated levels on tall towers
         D.REPLACE_MM, D.REPLACE_DEG = self.STYLES[st]
         self.style = st
         self.cyc["style"] = st
@@ -2023,6 +2065,8 @@ def use_sim(port, sim=None):
     D.LOOP.mkdir(parents=True, exist_ok=True)
     O.RECORDS = sim / "opstack" / "calib_records.jsonl"
     TALL, LEARN = sim / "tall", sim / "learn"
+    from hillclimb.runner.calib import keepout as KO
+    KO.FILE, KO.OVERRIDE = TALL / "keepout.json", TALL / "world_override.json"  # each sim keeps its own keep-out file
     Tall.sync = lambda self: None
 
 
@@ -2173,7 +2217,6 @@ def main():
                         and k not in column and abs(bot(b) - TABLE_Z) < 0.005]
                 order = sorted(cand, key=lambda k: (bool(blocks[k].get("lying")), -bot(blocks[k])))
                 t.dr = {"carry_z": 0.15, "over_dz": 0.01}
-                t.spot_area = ((0.19, 0.29), (-0.12, 0.15))
                 D.status(f"tbrun fallback: the runner's own planner from the column {column} with {order}")
                 res = t.best_sequence(order, tuple(column))
                 if res is None:
@@ -2199,7 +2242,10 @@ def main():
         D.rec("/start")
         clean = True
         try:
-            t.multi_look(LOOKS_OLD if "--old-looks" in sys.argv else None)
+            # EXTRA_LOOKS="x,y,z,yaw;...": more look poses (m, deg) for blocks the standard looks miss (Nov 8 11:14: a
+            # yellow at (18.5, 23.7) seen only from (0.22, 0.18))
+            extra = [tuple(float(v) for v in p_.split(",")) for p_ in os.environ.get("EXTRA_LOOKS", "").split(";") if p_.strip()]
+            t.multi_look(list(LOOKS_OLD if "--old-looks" in sys.argv else LOOKS) + extra)
             do_scatter_setup(t)
             # first phase: piles taken apart top-down, touching blocks and weak blobs pushed apart (--no-separate: off)
             t.tower_ids = set(sum(t.scatter_list, []))
@@ -2243,11 +2289,15 @@ def main():
             if tower:
                 D.status(f"tallest: building on the standing tower {tower}")
             cand = [k for k, b in blocks.items() if b.get("iou", 0) >= 0.5 and b["x"] >= 0.15 and not k.startswith("pile") and k not in tower]
-            order = sorted(cand, key=lambda k: (bool(blocks[k].get("lying")), -bot(blocks[k])))  # flat low, side on top; tops of stacks first
+            last = [c for c in os.environ.get("LAST_COLOURS", "").split(",") if c]  # LAST_COLOURS=green: its fits are weak (Nov 8)
+            order = sorted(cand, key=lambda k: (colour_of(k) in last, bool(blocks[k].get("lying")), -bot(blocks[k])))  # flat low, side on top; tops of stacks first
             D.status("tallest: blocks " + ", ".join(f"{k} ({blocks[k]['x'] * 100:.1f}, {blocks[k]['y'] * 100:.1f}) z{bot(blocks[k]) * 1000:.0f}"
                                                    f"{' side' if blocks[k].get('lying') else ''} iou {blocks[k].get('iou', 0):.2f}" for k in order))
             t.dr = {"carry_z": 0.15, "over_dz": 0.01}
-            t.spot_area = ((0.19, 0.29), (-0.12, 0.15))
+            # the tower about 30 cm straight out (Isaiah, Nov 8 11:20): picks of blocks staged nearer the base never
+            # pass it; 8-9 high still reach there with the tilted top place. TOWER_AREA="x0,x1,y0,y1" (m) to change it
+            ta = [float(v) for v in os.environ.get("TOWER_AREA", "0.28,0.32,-0.04,0.04").split(",")]
+            t.spot_area = ((ta[0], ta[1]), (ta[2], ta[3]))
             if "--next-move-only" not in sys.argv:
                 # the whole sequence (clearing moves, pushes, every stack place) planned per spot before anything moves
                 res = t.best_sequence(order, tuple(tower))
@@ -2565,6 +2615,12 @@ def world_from_records():
                 k += "'"
             world[k] = {"x": f["x"], "y": f["y"], "yaw": f["yaw"], "level": f.get("level", 0), "iou": f["iou"], "edge": f["edge"],
                         "z0": f.get("z0"), "lying": f.get("lying", False), "t_seen": 0, "placed": True}
+    # blocks a person or the overhead saw that the records miss (a base built on where it lay, a tilted top place):
+    # "add": [{"id", "x", "y", "z0", "yaw"}] (m) in world_override.json (Nov 8 11:46)
+    if ov.exists():
+        for a in json.loads(ov.read_text()).get("add", []):
+            world[a["id"]] = {"x": a["x"], "y": a["y"], "yaw": a.get("yaw", 0.0), "level": int(round((a["z0"] - TABLE_Z) / H)), "iou": 1.0,
+                              "edge": False, "z0": a["z0"], "lying": False, "t_seen": 0, "placed": True, "confirmed": True}
     # corrections seen by a person or another camera: a stack at (x, y) bottom first, each block flat or on its side;
     # bottoms recomputed from the shapes (runs/station/tall/world_override.json, applied when newer than the records)
     ov = TALL / "world_override.json"

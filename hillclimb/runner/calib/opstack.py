@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pathlib
 import sys
 import time
@@ -42,7 +43,7 @@ from hillclimb.runner.calib.tower_plan import FACE, H, Kin, SagModel, Shape, Wri
 from hillclimb.runner.calib.tower_safety import BOX_HI, BOX_LO, TowerSafety
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-_RUNS_ROOT = pathlib.Path(__import__("os").environ.get("HILLCLIMB_RUNS", str(pathlib.Path.home() / "hillclimb_runs")))
+_RUNS_ROOT = pathlib.Path(os.environ.get("HILLCLIMB_RUNS", str(pathlib.Path.home() / "hillclimb_runs")))
 URL = "http://127.0.0.1:8691"
 TEAM = "http://127.0.0.1:18081/api/state"
 DREAM = "http://127.0.0.1:18084/api/state"
@@ -346,6 +347,8 @@ PLACE_DOWN = np.array([-0.0040, -0.0012, -0.0004])
 GRIP_TIP = 0.007  # measured fingertips this high (arm frame) when gripping a block on the table (15 mm over it)
 CARRY_Z = 0.150  # fingertips over everything by more than 8 cm (the tower top is 61 mm)
 LOOK_TIP = (0.28, 0.0, 0.19, 90.0)
+if os.environ.get("LOOK_TIP"):  # "x,y,z,yaw": a look pose off a tall tower standing under the usual one (Nov 8 11:46)
+    LOOK_TIP = tuple(float(v) for v in os.environ["LOOK_TIP"].split(","))
 LOOK_SEED = np.array([0.0, -1.84, 1.76, -1.48, 0.0, 0.0])  # joints near the look pose: an IK seed that solves most of the table
 TICK = 1 / 30
 STREAM_HOOK = None  # tests: called with (tag, model joints, grip, held) for every streamed goal
@@ -676,6 +679,10 @@ class Plan:
             if not ok:
                 raise SystemExit(f"plan refused at {tag}: {why}")
         self.rule_check()
+        # the keep-out cylinders at plan time too, so planners (and dry runs) choose a way around a tower instead of
+        # being stopped at stream time (Nov 8 12:04: a dry run passed a reach that the stream then refused)
+        from hillclimb.runner.calib import keepout as KO
+        KO.check(self.op, self.nodes, "plan", opening=float(self.opening or 0.095))
 
 
 # the arm server walks its command toward the goal at most 0.6 rad/s (station/armserver.py MAX_RATE, the sim the
@@ -683,6 +690,7 @@ class Plan:
 # 7 mm sideways in sim); every piece streams at most this
 WALK_MAX = 0.58
 LOW_V = 0.3
+FAST_SLOW_TAGS = ("last 3 cm",)
 CORNER_SETTLE = (0.07, 0.6, 0.004)  # at a corner: at least, at most (s), and the joint change (rad) that counts as still
 
 
@@ -724,8 +732,17 @@ def stream(op: Op, plan: Plan, grip, watch: GateWatch, tag):
     down) is posted exactly and the arm settles there before the next leg: goals 33 ms apart would otherwise cut it.
     Returns the timing and the end reading."""
     plan.rule_check()  # the motion rule, once more, before the first goal goes out
+    # every link against every standing tower's keep-out cylinder, for every motion of every process (calib/keepout.py)
+    from hillclimb.runner.calib import keepout as KO
+    KO.check(op, plan.nodes, tag, opening=float(getattr(plan, "opening", 0.095) or 0.095))
     nodes = plan.nodes
-    dur = [max(float(np.abs(q1 - q0).max()) / min(v, WALK_MAX), 1e-3) for (q0, _, _), (q1, v, _) in zip(nodes[:-1], nodes[1:])]
+    # plan.fast (Isaiah, Nov 8 11:10: picks 2x, places as they are): its pieces stream at fast x WALK_MAX through the
+    # server's /target (each goal straight to the motors; /move walks at most 0.6 rad/s), except the pieces tagged in
+    # FAST_SLOW_TAGS (the last 3 cm onto the block), which stay at WALK_MAX on /move so the grasp lands where it did
+    fast = float(getattr(plan, "fast", 1.0) or 1.0)
+    quick = [fast > 1.0 and tg not in FAST_SLOW_TAGS for (_, _, tg) in nodes[1:]]
+    dur = [max(float(np.abs(q1 - q0).max()) / min(v * (fast if qk else 1.0), WALK_MAX * (fast if qk else 1.0)), 1e-3)
+           for (q0, _, _), (q1, v, _), qk in zip(nodes[:-1], nodes[1:], quick)]
     T, ta = sum(dur), 0.3
     cum = np.concatenate([[0], np.cumsum(dur)])
     corners = [float(cum[j]) for j in corners_of(op, nodes)]
@@ -764,7 +781,10 @@ def stream(op: Op, plan: Plan, grip, watch: GateWatch, tag):
         cmd = op.sag.command(q) - op.dq
         if STREAM_HOOK is not None:
             STREAM_HOOK(nodes[i + 1][2], q, float(grip), getattr(plan, "held", None))
-        _post("/move", {"q": [float(x) for x in cmd], "grip": float(grip), "rate": float(min(1.6, 1.3 * min(v, WALK_MAX)))})
+        if quick[i]:
+            _post("/target", {"q": [float(x) for x in cmd], "grip": float(grip)})
+        else:
+            _post("/move", {"q": [float(x) for x in cmd], "grip": float(grip), "rate": float(min(1.6, 1.3 * min(v, WALK_MAX)))})
         posts += 1
         if corner is not None and tau < T:
             t_c = time.time()
