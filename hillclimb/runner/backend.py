@@ -371,6 +371,12 @@ class RunnerBackend:
                     return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": r.get("why"), "timing": {"s": round(_wall.time() - T0, 1)}}
             if len(self.tower) >= TILT_LEVEL and self.helper_spots:
                 return self._place_tilted(T0)
+            if len(self.tower) >= int(os.environ.get("TOP_TILT_FROM", "4")):
+                # past fingers-down's reach over the top: the remote metal arm's night_top recipe (6 high REAL, Nov 8
+                # 11:50 and 12:01): a 20 deg tilted hand, 9 mm sag, one block at a time
+                r = self._place_top_tilted(T0)
+                if r.get("ok") or r.get("raised"):
+                    return r
             t = self.t
             while _wall.time() - T0 < deadline_s:
                 if not self.moves:
@@ -416,6 +422,66 @@ class RunnerBackend:
         except BaseException as e:  # noqa: BLE001
             r = self._fail("place_next", e)
             return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": r["why"], "tower": list(self.tower), "timing": {"s": round(_wall.time() - T0, 1)}}
+
+    def _place_top_tilted(self, T0):
+        """One loose block onto the tower top with the hand tilted (calib/night_top.plan_top): tilted pick, carry level
+        over the top, set down, slide out, look pose. Tries the loose blocks nearest the tower first until one plans."""
+        import numpy as np
+        from hillclimb.runner.calib import keepout as KO
+        from hillclimb.runner.calib import night_top as NT
+        t = self.t
+        theta = math.radians(float(os.environ.get("TOP_TILT_DEG", "20")))
+        sag = float(os.environ.get("TOP_SAG_MM", "9")) / 1000
+        if not self.tower or self.tower[-1] not in t.belief:
+            return {"ok": False, "why": "tilted top: no tower top in the belief"}
+        s_b = dict(t.belief[self.tower[-1]])
+        top = D.top_of(s_b)
+        tx0, ty0 = s_b["x"], s_b["y"]
+        loose = [k for k, b in t.belief.items() if k not in self.tower and not b.get("lying") and abs(D.bot(b) - T.TABLE_Z) < 0.008
+                 and b.get("iou", 0) >= 0.5 and not k.startswith("pile")
+                 and math.hypot(b["x"] - tx0, b["y"] - ty0) > 0.06]
+        loose.sort(key=lambda k: math.hypot(t.belief[k]["x"] - tx0, t.belief[k]["y"] - ty0))
+        whys = []
+        for bid in loose:
+            try:
+                dpsi, pick, carry, out, gh, z_set, tx, ty = NT.plan_top(t, bid, s_b, top, theta, sag, quiet=True)
+            except SystemExit as e:
+                whys.append(f"{bid}: {str(e)[:70]}")
+                continue
+            D.status(f"tilted top: {bid} onto the tower top ({(top - T.TABLE_Z) * 1000:.0f} mm), {math.degrees(theta):.0f} deg tilt")
+            op = t.op
+            try:
+                t.go(pick, 0.8, "top pick", "down")
+                t.grip_to(O.arm_state(), D.GRIP_CLOSE, wait_close=True)
+                st = O.arm_state()
+                if st["grip"] < D.GRIP_HELD:
+                    t.grip_to(st, 0.8)
+                    return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": f"tilted top: {bid} grasp closed empty",
+                            "tower": list(self.tower), "timing": {"s": round(_wall.time() - T0, 1)}}
+                op.held = (bid, gh)
+                KO.ACTIVE[:] = [(tx, ty)]
+                t.go(carry, D.GRIP_CLOSE, "top carry", "down")
+                t.release(O.arm_state())
+                op.held = None
+                tip_rel = op.tip(np.array(O.arm_state()["q"]) + op.dq)[0]
+                KO.add_place(float(tip_rel[0]), float(tip_rel[1]), top, T.H, T.TABLE_Z, note=f"{bid} tilted top place")
+                t.go(out, 0.8, "slide out", "level")
+            finally:
+                KO.ACTIVE.clear()
+                op.held = None
+            b = dict(t.belief.pop(bid))
+            b.update(x=tx, y=ty, z0=top, level=len(self.tower))
+            nid = f"{T.colour_of(bid)}#t{len(self.tower) + 1}"
+            t.belief[nid] = b
+            self.tower.append(nid)
+            t.put_blocks()
+            try:
+                t.to_pose(O.LOOK_TIP, "look")
+            except SystemExit as e:
+                D.status(f"tilted top: look pose after the place refused ({str(e)[:80]})")
+            return self._note(ok=True, grew=True, verified=True, what="place_next", placed_id=nid, why="tilted top place",
+                              tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
+        return {"ok": False, "why": "tilted top: no loose block plans: " + "; ".join(whys)[:300]}
 
     def _place_tilted(self, T0):
         """Levels 8 and 9: the next staged helper's top block, tilted onto the tower top (calib/tilt_helper.py)."""
