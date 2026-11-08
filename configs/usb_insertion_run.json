@@ -1,0 +1,13 @@
+{
+  "plan": "../recordings/usb-insertion/plan.json",
+  "controller_url": "http://127.0.0.1:8081",
+  "right_url": "http://127.0.0.1:8692",
+  "start_q": null,
+  "start_grip": null,
+  "start_speed_rad_s": 0.5,
+  "start_tolerance_rad": 0.01,
+  "start_grip_tolerance": 0.02,
+  "poll_seconds": 0.1,
+  "task": null,
+  "checkpoint": null
+}
