@@ -73,13 +73,16 @@ def test_usb_gate_needs_actual_removal(evidence):
     assert master.phase == 1
 
 
-@pytest.mark.parametrize("change", [
-    {"height_inches": 3.5},
-    {"continuous_freestanding_s": 2.99},
-    {"visual_freestanding": False},
-    {"visual_height_at_least_4": False},
-    {"height_inches": float("nan")},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"height_inches": 3.5},
+        {"continuous_freestanding_s": 2.99},
+        {"visual_freestanding": False},
+        {"visual_height_at_least_4": False},
+        {"height_inches": float("nan")},
+    ],
+)
 def test_tower_gate_cannot_advance_early(change):
     master = DemoMaster("blue")
     finish(master, "right", USB)

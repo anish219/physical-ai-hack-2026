@@ -49,12 +49,14 @@ def convert(source, target, side, pose):
         destination = target / path.relative_to(source)
         destination.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(table, destination)
-    names = [name for s in ("left", "right") for name in
-             ([f"{s}_joint_{i}" for i in range(6)] + [f"{s}_gripper"])]
+    names = [name for s in ("left", "right") for name in ([f"{s}_joint_{i}" for i in range(6)] + [f"{s}_gripper"])]
     for key in ("observation.state", "action"):
         info["features"][key] = {"dtype": "float32", "shape": [14], "names": names}
-    info["static_arm_context"] = {"controlled_side": side, "pose": pose,
-                                  "source": "explicit static context supplied at export"}
+    info["static_arm_context"] = {
+        "controlled_side": side,
+        "pose": pose,
+        "source": "explicit static context supplied at export",
+    }
     (target / "meta/info.json").write_text(json.dumps(info, indent=2) + "\n")
     (target / "meta/episodes_stats.jsonl").write_text("".join(json.dumps(row) + "\n" for row in stats))
 
@@ -66,8 +68,12 @@ def main():
     parser.add_argument("--side", required=True, choices=("left", "right"))
     parser.add_argument("--context-pose", required=True, type=pathlib.Path)
     args = parser.parse_args()
-    convert(args.dataset.expanduser(), args.out.expanduser(), args.side,
-            json.loads(args.context_pose.expanduser().read_text()))
+    convert(
+        args.dataset.expanduser(),
+        args.out.expanduser(),
+        args.side,
+        json.loads(args.context_pose.expanduser().read_text()),
+    )
     print(f"Wrote {args.out}; next run tools/add_eef.py on this export")
 
 

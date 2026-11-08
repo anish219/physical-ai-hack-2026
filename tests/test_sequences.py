@@ -219,7 +219,12 @@ def test_script_pointer_must_be_registered_to_run_but_can_be_saved_early():
     assert saved["phases"][0]["steps"][0]["monitor"]["script"] == "usb_unplugged"
     with pytest.raises(ValueError, match="Unknown monitor script pointer"):
         validate_definition(saved, for_run=True, scripts=())
-    assert validate_definition(saved, for_run=True, scripts=("usb_unplugged",))["phases"][0]["steps"][0]["monitor"]["script"] == "usb_unplugged"
+    assert (
+        validate_definition(saved, for_run=True, scripts=("usb_unplugged",))["phases"][0]["steps"][0]["monitor"][
+            "script"
+        ]
+        == "usb_unplugged"
+    )
 
 
 def test_registered_monitors_run_after_each_window_without_gating(tmp_path):

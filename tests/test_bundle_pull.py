@@ -108,9 +108,9 @@ def test_servo_closes_loop_using_warped_recording_images():
     class ImageArm(FakeArm):
         def image(self):
             x, y, scale, shear, tilt_x, tilt_y = self.q
-            homography = np.array([[1 + scale, shear, x * 140],
-                                   [-shear, 1 + scale, y * 140],
-                                   [tilt_x * 0.004, tilt_y * 0.004, 1]])
+            homography = np.array(
+                [[1 + scale, shear, x * 140], [-shear, 1 + scale, y * 140], [tilt_x * 0.004, tilt_y * 0.004, 1]]
+            )
             return cv2.warpPerspective(vision.reference, homography, vision.reference.shape[1::-1])
 
     arm = ImageArm([0.035, -0.025, 0.006, 0.004, 0.002, -0.002])
@@ -136,8 +136,14 @@ def test_rigid_retarget_keeps_tool_path_and_grip_in_aligned_frame():
     kin = ToolKinematics(cartesian_fk)
     aim = np.array([0.2, -0.1, 0.3, 0.1, 0.2, -0.1])
     aligned = aim + [0.01, -0.02, 0.03, 0.04, 0, 0.02]
-    rows = [{"t": i / 30, "q": (aim + np.array([i * 0.005, 0, i * 0.003, 0, 0, 0])).tolist(),
-             "grip": max(0, 0.44 - i * 0.1)} for i in range(5)]
+    rows = [
+        {
+            "t": i / 30,
+            "q": (aim + np.array([i * 0.005, 0, i * 0.003, 0, 0, 0])).tolist(),
+            "grip": max(0, 0.44 - i * 0.1),
+        }
+        for i in range(5)
+    ]
     result = retarget(rows, aim, aligned, kin)
     correction = cartesian_fk(aligned) @ np.linalg.inv(cartesian_fk(aim))
     for before, after in zip(rows, result, strict=True):
@@ -151,8 +157,12 @@ def test_fk_uses_real_model_and_joint_signs(urdf_path, monkeypatch):
 
     from dream_hackathon import config
 
-    mm = SimpleNamespace(urdf=urdf_path, flange_link="link6", urdf_joints=[f"j{i}" for i in range(1, 7)],
-                         joint_signs=[1, -1, 1, 1, 1, -1])
+    mm = SimpleNamespace(
+        urdf=urdf_path,
+        flange_link="link6",
+        urdf_joints=[f"j{i}" for i in range(1, 7)],
+        joint_signs=[1, -1, 1, 1, 1, -1],
+    )
     station = SimpleNamespace(makermods=mm, arms={"right": SimpleNamespace(tcp_xyz_m=(0.135, 0, 0))})
     monkeypatch.setattr(config, "load", lambda _: station)
     kin = ToolKinematics.from_config("unused", "right")
@@ -194,8 +204,17 @@ def test_full_sequence_aims_before_grasp_and_retargets_before_shortcut(monkeypat
         arm.command(q + correction, grip)
         return arm.q
 
-    run(arm, rows, plan, vision, ToolKinematics(cartesian_fk), lambda phase, *_: phases.append(phase),
-        play_fn=play_fn, move_fn=move_fn, servo_fn=align)
+    run(
+        arm,
+        rows,
+        plan,
+        vision,
+        ToolKinematics(cartesian_fk),
+        lambda phase, *_: phases.append(phase),
+        play_fn=play_fn,
+        move_fn=move_fn,
+        servo_fn=align,
+    )
     assert phases == ["start", "approach", "grasp-pull", "shortcut-drop", "complete"]
     assert len(played) == 3
     np.testing.assert_allclose(played[1][0]["q"], np.asarray(played[0][-1]["q"]) + correction, atol=1e-5)

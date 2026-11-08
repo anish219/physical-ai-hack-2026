@@ -11,13 +11,16 @@ import pytest
 from dream_hackathon.demo_vlm import LocalVLM, OpenAIVLM, Verdict, run_cases
 
 
-@pytest.mark.parametrize("content", [
-    '{"verdict": true, "reason": "x"}',
-    '{"verdict": "yes"}',
-    '{"verdict": "yes", "reason": 3}',
-    '{"verdict": "maybe", "reason": "x"}',
-    '[]',
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"verdict": true, "reason": "x"}',
+        '{"verdict": "yes"}',
+        '{"verdict": "yes", "reason": 3}',
+        '{"verdict": "maybe", "reason": "x"}',
+        "[]",
+    ],
+)
 def test_malformed_verdict_is_not_positive(content):
     with pytest.raises(ValueError):
         Verdict.parse(content)
@@ -38,14 +41,24 @@ def test_real_http_protocol_and_no_expected_label_in_prompt(tmp_path, provider):
             requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
             self.send_response(200)
             self.end_headers()
-            response = {
-                "message": {"content": '{"verdict": "yes", "reason": "visible"}'}
-            } if provider == "ollama" else {
-                "status": "completed",
-                "output": [{"type": "message", "content": [{
-                    "type": "output_text", "text": '{"verdict": "yes", "reason": "visible"}',
-                }]}],
-            }
+            response = (
+                {"message": {"content": '{"verdict": "yes", "reason": "visible"}'}}
+                if provider == "ollama"
+                else {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": '{"verdict": "yes", "reason": "visible"}',
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
             self.wfile.write(json.dumps(response).encode())
 
     (tmp_path / "frame.jpg").write_bytes(b"\xff\xd8\xff image fixture, not real inference")
@@ -80,10 +93,13 @@ def test_real_http_protocol_and_no_expected_label_in_prompt(tmp_path, provider):
     assert base64.b64decode(encoded) == (tmp_path / "frame.jpg").read_bytes()
 
 
-@pytest.mark.parametrize("response", [
-    {"status": "incomplete"},
-    {"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal"}]}]},
-])
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "incomplete"},
+        {"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal"}]}]},
+    ],
+)
 def test_hosted_nonverdict_is_reported_as_error(monkeypatch, response):
     monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: io.BytesIO(json.dumps(response).encode()))
     with pytest.raises(ValueError):

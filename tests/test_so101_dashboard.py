@@ -67,14 +67,17 @@ class DashboardTests(unittest.TestCase):
         try:
             with urllib.request.urlopen(url) as response:
                 html = response.read().decode()
-            self.assertEqual(html.count('<button '), 6)
+            self.assertEqual(html.count("<button "), 6)
             self.assertEqual(html.count('type="range"'), 2)
             self.assertIn('id="tracking-state"', html)
-            self.assertIn('button.onclick=()=>send({tracking:true})', html)
-            self.assertIn('untrack.onclick=()=>send({tracking:false})', html)
+            self.assertIn("button.onclick=()=>send({tracking:true})", html)
+            self.assertIn("untrack.onclick=()=>send({tracking:false})", html)
             for change in ({"tracking": True}, {"scale": 1.75}, {"tracking": False}):
-                request = urllib.request.Request(url + "/api/control", data=json.dumps(change).encode(),
-                                                 headers={"Content-Type": "application/json"})
+                request = urllib.request.Request(
+                    url + "/api/control",
+                    data=json.dumps(change).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
                 with urllib.request.urlopen(request) as response:
                     state = json.load(response)
                 for key, value in change.items():

@@ -44,10 +44,12 @@ class Client:
 
     def get_action(self):
         self.calls += 1
-        return {"per_key": {
-            f"action.{self.side}_arm": [[0.1] * 6, [0.2] * 6, [0.3] * 6],
-            f"action.{self.side}_gripper": [[0], [50], [100]],
-        }}
+        return {
+            "per_key": {
+                f"action.{self.side}_arm": [[0.1] * 6, [0.2] * 6, [0.3] * 6],
+                f"action.{self.side}_gripper": [[0], [50], [100]],
+            }
+        }
 
     def close(self):
         self.closed = True
@@ -121,9 +123,7 @@ def test_native_right_inspect_never_sends_commands_or_reads_left():
             pytest.fail("Inspect must not write or read hardware")
 
     raw = Client()
-    caller = StationCaller(
-        "right", {"right": Endpoint()}, client_factory=lambda *_: JointModelClient(raw, body())
-    )
+    caller = StationCaller("right", {"right": Endpoint()}, client_factory=lambda *_: JointModelClient(raw, body()))
     caller.sample = ({"q": [0.1] * 6, "grip": 0.7}, b"scene", b"wrist")
     caller.start({"task": "unplug", "checkpoint": "dream-1-ft:test"}, run=False)
     caller.worker.join(timeout=2)

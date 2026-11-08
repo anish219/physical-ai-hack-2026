@@ -18,21 +18,38 @@ def main():
     args = parser.parse_args()
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
     rows = [json.loads(line) for line in (args.plan.parent / plan["targets_file"]).read_text().splitlines()]
-    print(json.dumps({"name": plan["name"], "duration_s": rows[-1]["t"], "targets": len(rows),
-                      "mode": "execute" if args.execute else "inspect only"}), flush=True)
+    print(
+        json.dumps(
+            {
+                "name": plan["name"],
+                "duration_s": rows[-1]["t"],
+                "targets": len(rows),
+                "mode": "execute" if args.execute else "inspect only",
+            }
+        ),
+        flush=True,
+    )
     if not args.execute:
         return
     with urllib.request.urlopen(plan["target_url"].removesuffix("/target") + "/state", timeout=10) as response:
         current = json.load(response)
-    take = Take(-1, np.array([row["t"] for row in rows]), np.array([row["q"] for row in rows]),
-                np.array([row["grip"] for row in rows]))
-    replay = Replay(take, current["q"], current["grip"],
-                    plan["initial_approach_max_joint_speed_rad_s"], time.monotonic())
+    take = Take(
+        -1,
+        np.array([row["t"] for row in rows]),
+        np.array([row["q"] for row in rows]),
+        np.array([row["grip"] for row in rows]),
+    )
+    replay = Replay(
+        take, current["q"], current["grip"], plan["initial_approach_max_joint_speed_rad_s"], time.monotonic()
+    )
     while True:
         tick = time.monotonic()
         q, grip, finished = replay.step(tick)
-        request = urllib.request.Request(plan["target_url"], data=json.dumps({"q": q.tolist(), "grip": grip}).encode(),
-                                         headers={"Content-Type": "application/json"})
+        request = urllib.request.Request(
+            plan["target_url"],
+            data=json.dumps({"q": q.tolist(), "grip": grip}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(request, timeout=10) as response:
             response.read()
         if finished:

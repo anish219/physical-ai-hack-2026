@@ -35,9 +35,7 @@ def test_sdk_catalog_uses_exact_checkpoint_ids_without_opening_policy(monkeypatc
             return [SimpleNamespace(id="dream-1-ft:account-task", owner="mine", servable=True)]
 
     monkeypatch.setitem(sys.modules, "dream", SimpleNamespace(DreamClient=Client))
-    assert dream_caller.available_models() == [
-        {"id": "dream-1-ft:account-task", "owner": "mine", "servable": True}
-    ]
+    assert dream_caller.available_models() == [{"id": "dream-1-ft:account-task", "owner": "mine", "servable": True}]
 
 
 def test_catalog_endpoint_and_manual_checkpoint_drafts_remain_independent():

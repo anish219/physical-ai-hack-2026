@@ -82,7 +82,11 @@ class RecordingTests(unittest.TestCase):
         from dream_hackathon import cameras, dataset
 
         station = types.SimpleNamespace(
-            arm="metal", family="makermods", fps=30, record_width=160, record_height=90,
+            arm="metal",
+            family="makermods",
+            fps=30,
+            record_width=160,
+            record_height=90,
             cameras=(types.SimpleNamespace(role="overhead"),),
         )
         camera = Mock()
@@ -119,7 +123,11 @@ class RecordingTests(unittest.TestCase):
             with self.subTest(side=side), tempfile.TemporaryDirectory() as folder:
                 roles = ("overhead", "wrist_l", "wrist_r")
                 station = types.SimpleNamespace(
-                    arm="metal", family="makermods", fps=30, record_width=160, record_height=90,
+                    arm="metal",
+                    family="makermods",
+                    fps=30,
+                    record_width=160,
+                    record_height=90,
                     cameras=tuple(types.SimpleNamespace(role=role) for role in roles),
                 )
                 live = {role: Mock() for role in roles if role != inactive}
@@ -156,9 +164,7 @@ class RecordingTests(unittest.TestCase):
             camera.latest.return_value = np.zeros((90, 160, 3), dtype=np.uint8)
             recorder.cameras = {"overhead": camera}
             names = [f"right_joint_{i}" for i in range(6)] + ["right_gripper"]
-            recorder.writer = dataset.DatasetWriter(
-                root, 30, "metal", names, ["observation.images.scene"], 160, 90
-            )
+            recorder.writer = dataset.DatasetWriter(root, 30, "metal", names, ["observation.images.scene"], 160, 90)
             recorder.start()
             for _ in range(dataset.min_frames(30)):
                 recorder.add(np.zeros(6), 0.25, np.ones(6), 0.75)
