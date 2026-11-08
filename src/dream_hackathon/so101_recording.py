@@ -5,6 +5,10 @@ import pathlib
 import numpy as np
 
 
+def recording_frame_enabled(state, *, pause_untracked=False):
+    return state["recording_requested"] and (not pause_untracked or state["tracking"])
+
+
 class ExampleRecorder:
     def __init__(
         self,
@@ -16,6 +20,7 @@ class ExampleRecorder:
         *,
         context_pose=None,
         camera_factory=None,
+        include_inactive_wrist=False,
     ) -> None:
         self.station, self.side, self.root, self.task = station, side, root, task
         self.camera_roles = tuple(camera_roles)
@@ -25,6 +30,7 @@ class ExampleRecorder:
         self.episode = None
         self.context_pose = context_pose
         self.camera_factory = camera_factory
+        self.include_inactive_wrist = include_inactive_wrist
 
     @property
     def frames(self) -> int:
@@ -66,7 +72,9 @@ class ExampleRecorder:
         if not self.cameras:
             self.cameras = (self.camera_factory or cameras.open_cameras)(
                 tuple(
-                    c for c in self.station.cameras if c.role in self.camera_roles and c.role != self.inactive_wrist
+                    c
+                    for c in self.station.cameras
+                    if c.role in self.camera_roles and (self.include_inactive_wrist or c.role != self.inactive_wrist)
                 ),
                 self.station.record_width,
                 self.station.record_height,
@@ -104,7 +112,7 @@ class ExampleRecorder:
         for role, key in layouts.video_keys(self.station.family).items():
             if role not in self.camera_roles:
                 continue
-            if role == self.inactive_wrist:
+            if role == self.inactive_wrist and not self.include_inactive_wrist:
                 images[key] = np.zeros((self.station.record_height, self.station.record_width, 3), dtype=np.uint8)
             else:
                 images[key] = self.cameras[role].latest()

@@ -3,6 +3,44 @@ const selections = ['left', 'right', 'both'];
 const clientId = crypto.randomUUID();
 let station = {}, dragging = false, gripDragging = {};
 const sharedDrafts = {}, pending = {}, inFlight = {}, drains = {}, versions = {};
+let availableModels = [];
+
+function syncModelSelector(selection) {
+  const selector = $('api-' + selection + '-model');
+  const checkpoint = sharedDrafts[selection].checkpoint;
+  selector.replaceChildren(new Option('Enter a checkpoint ID below', ''));
+  for (const [owner, label] of [['mine', 'Your trained models'], ['public', 'Public models']]) {
+    const group = document.createElement('optgroup'); group.label = label;
+    for (const model of availableModels.filter(model => model.owner === owner)) {
+      group.append(new Option(model.id + (model.servable ? '' : ' (not available yet)'), model.id));
+    }
+    if (group.children.length) selector.append(group);
+  }
+  selector.value = availableModels.some(model => model.id === checkpoint) ? checkpoint : '';
+}
+
+async function refreshModels() {
+  for (const selection of selections) {
+    $('api-' + selection + '-refresh-models').disabled = true;
+    $('api-' + selection + '-model-status').textContent = 'Loading models…';
+  }
+  try {
+    const response = await fetch('/api/models'); const result = await response.json();
+    if (!response.ok) throw Error(result.error);
+    availableModels = result.models;
+    const trained = availableModels.filter(model => model.owner === 'mine').length;
+    for (const selection of selections) {
+      syncModelSelector(selection);
+      $('api-' + selection + '-model-status').textContent = trained ?
+        trained + ' trained model' + (trained === 1 ? '' : 's') + ' available to this account.' :
+        'No trained models returned for this account.';
+    }
+  } catch (error) {
+    for (const selection of selections) $('api-' + selection + '-model-status').textContent = error.message;
+  } finally {
+    for (const selection of selections) $('api-' + selection + '-refresh-models').disabled = false;
+  }
+}
 
 for (const selection of selections) {
   const panel = $('api-' + selection + '-panel');
@@ -16,10 +54,21 @@ for (const selection of selections) {
   $('api-' + selection + '-title').textContent = 'Dream API · ' +
     (selection === 'both' ? 'Both arms' : selection === 'left' ? 'Left arm' : 'Right arm');
   sharedDrafts[selection] = {task: '', checkpoint: 'dreamlabs/dream-1-beta'};
+  $('api-' + selection + '-refresh-models').onclick = refreshModels;
+  $('api-' + selection + '-model').onchange = event => {
+    if (!event.target.value) return;
+    const checkpoint = $('api-' + selection + '-checkpoint');
+    checkpoint.value = event.target.value;
+    checkpoint.dispatchEvent(new Event('input'));
+  };
   pending[selection] = {}; inFlight[selection] = {}; versions[selection] = -1;
   for (const field of ['task', 'checkpoint']) {
     $('api-' + selection + '-' + field).oninput = event => {
       pending[selection][field] = event.target.value;
+      if (field === 'checkpoint') {
+        const selector = $('api-' + selection + '-model');
+        selector.value = availableModels.some(model => model.id === event.target.value) ? event.target.value : '';
+      }
       flushDraft(selection);
     };
   }
@@ -47,11 +96,14 @@ function syncDraftFields(selection) {
 
 function receiveDraft(selection, fields, revision) {
   if (!(selection in sharedDrafts) || revision < versions[selection]) return;
+  const previousCheckpoint = sharedDrafts[selection].checkpoint;
   versions[selection] = revision;
   for (const field of ['task', 'checkpoint']) {
     if (field in fields) sharedDrafts[selection][field] = fields[field];
   }
   syncDraftFields(selection);
+  if (previousCheckpoint !== sharedDrafts[selection].checkpoint &&
+      !('checkpoint' in pending[selection]) && !('checkpoint' in inFlight[selection])) syncModelSelector(selection);
 }
 
 function flushDraft(selection) {
@@ -88,7 +140,7 @@ async function action(path, body = {}) {
 function renderSelections() {
   const inputs = station.inputs || {}, both = station.combined_input;
   for (const side of ['left', 'right']) {
-    for (const source of ['dream', 'so101', 'sequence', 'auto']) {
+    for (const source of ['dream', 'so101', 'star', 'sequence', 'auto']) {
       $(side + '-input-' + source).setAttribute('aria-pressed', String(!both && inputs[side] === source));
     }
   }
@@ -96,6 +148,7 @@ function renderSelections() {
   $('both-input-sequence').setAttribute('aria-pressed', String(both === 'sequence'));
   $('both-input-auto').setAttribute('aria-pressed', String(both === 'auto'));
   $('so101-panel').hidden = !Object.values(inputs).includes('so101');
+  $('star-panel').hidden = !Object.values(inputs).includes('star');
   for (const selection of selections) {
     $('api-' + selection + '-panel').hidden = selection === 'both' ? both !== 'dream' :
       !!both || inputs[selection] !== 'dream';
@@ -142,22 +195,43 @@ function render(state) {
     $('api-' + selection + '-error').textContent = api.error || api.observation_error || '';
     $('api-' + selection + '-result').textContent = JSON.stringify({observation: api.observation, rows: api.rows}, null, 2);
   }
-  const assigned = !!state.assigned_side;
-  $('side').textContent = assigned ? state.assigned_side + ' arm' : 'Not assigned';
-  $('tracking-state').textContent = state.tracking ? 'TRACKED' : 'UNTRACKED';
-  $('tracking-state').dataset.on = !!state.tracking;
-  for (const id of ['track', 'untrack', 'scale']) $(id).disabled = !assigned;
-  $('hint').textContent = 'Track captures fresh leader and arm anchors. Untrack holds position.';
-  if (!dragging) { $('scale').value = state.scale; $('value').textContent = Number(state.scale).toFixed(2) + '×'; }
-  $('record').disabled = !assigned || !state.arm_open;
-  $('record').textContent = state.recording_requested ? 'Stop & save example' : 'Record example';
-  $('reject').disabled = !assigned || !(state.recording || state.recording_requested || state.saved_episodes);
-  $('reject').textContent = state.recording || state.recording_requested ? 'Reject current example' : 'Reject last saved example';
-  $('record-status').textContent = [state.recording ? 'Recording · ' + state.frames + ' frames' : state.saved_episodes + ' saved examples',
-    state.dataset_dir, state.recording_error].filter(Boolean).join(' · ');
+  renderLeader(state, '');
+  renderLeader(state.star || {}, 'star-');
+  const star = state.star || {};
+  $('star-record').textContent = star.recording_requested ? 'Stop recording' : 'Start recording';
+  $('star-record').setAttribute('aria-pressed', String(!!star.recording_requested));
+  $('star-replay').textContent = star.replay_requested ? 'Stop replay' : 'Replay latest';
+  $('star-replay').disabled = !star.assigned_side ||
+    !(star.saved_episodes || star.recording || star.recording_requested || star.replay_requested);
+  if (document.activeElement !== $('star-replay-speed')) $('star-replay-speed').value = star.replay_start_speed ?? 0.5;
+  $('star-replay-status').textContent = star.replay_error ||
+    (star.replay_phase === 'pending' ? 'Preparing replay…' :
+     star.replay_phase === 'approaching' ? 'Moving to start · max ' + star.replay_start_speed + ' rad/s per joint' :
+     star.replay_phase === 'playing' ? 'Replaying · ' + Number(star.replay_elapsed).toFixed(1) +
+       ' / ' + Number(star.replay_duration).toFixed(1) + ' s' :
+     star.replay_phase === 'complete' ? 'Replay complete' :
+     'Replay approaches the start pose, then follows the recorded timing.');
   renderSelections();
-  if (window.renderSequenceState) window.renderSequenceState(state.sequences);
+  if (window.renderSequenceState) window.renderSequenceState(state.sequences, state.monitor_scripts);
   if (window.renderFlowState) window.renderFlowState(state.flows);
+}
+
+function renderLeader(state, prefix) {
+  const element = id => $(prefix + id);
+  const assigned = !!state.assigned_side;
+  element('side').textContent = assigned ? state.assigned_side + ' arm' : 'Not assigned';
+  element('tracking-state').textContent = state.tracking ? 'TRACKED' : 'UNTRACKED';
+  element('tracking-state').dataset.on = !!state.tracking;
+  for (const id of ['track', 'untrack', 'scale']) element(id).disabled = !assigned;
+  element('hint').textContent = 'Track captures fresh leader and arm anchors. Untrack holds position.';
+  if (!dragging) { element('scale').value = state.scale; element('value').textContent = Number(state.scale).toFixed(2) + '×'; }
+  element('record').disabled = !assigned || !state.arm_open;
+  element('record').textContent = state.recording_requested ? 'Stop & save example' : 'Record example';
+  element('reject').disabled = !assigned || !(state.recording || state.recording_requested || state.saved_episodes);
+  element('reject').textContent = state.recording || state.recording_requested ? 'Reject current example' : 'Reject last saved example';
+  element('record-status').textContent = [state.recording_paused ? 'Recording paused · ' + state.frames + ' frames' :
+    state.recording ? 'Recording · ' + state.frames + ' frames' : state.saved_episodes + ' saved examples',
+    state.dataset_dir, state.recording_error].filter(Boolean).join(' · ');
 }
 
 for (const side of ['left', 'right']) {
@@ -170,7 +244,7 @@ for (const side of ['left', 'right']) {
     await action('/api/arms/' + side + '/grip-torque', {torque_nm: Number($(side + '-grip-torque').value)});
     gripDragging[side] = false; render(station);
   };
-  for (const source of ['dream', 'so101', 'sequence', 'auto']) {
+  for (const source of ['dream', 'so101', 'star', 'sequence', 'auto']) {
     $(side + '-input-' + source).onclick = () => action('/api/arms/' + side + '/input', {
       source: !station.combined_input && station.inputs[side] === source ? null : source
     });
@@ -185,6 +259,15 @@ $('record').onclick = () => action('/api/control', {recording_requested: !statio
 $('reject').onclick = () => action('/api/reject');
 $('scale').oninput = () => {dragging = true; $('value').textContent = Number($('scale').value).toFixed(2) + '×';};
 $('scale').onchange = () => {dragging = false; action('/api/control', {scale: Number($('scale').value)});};
+$('star-track').onclick = () => action('/api/star/control', {tracking: true});
+$('star-untrack').onclick = () => action('/api/star/control', {tracking: false});
+$('star-record').onclick = () => action('/api/star/control', {recording_requested: !station.star.recording_requested});
+$('star-replay').onclick = () => action('/api/star/control', {replay_requested: !station.star.replay_requested});
+$('star-replay-speed').onchange = () => action('/api/star/control', {replay_start_speed: Number($('star-replay-speed').value)});
+$('star-reject').onclick = () => action('/api/star/reject');
+$('star-scale').oninput = () => {dragging = true; $('star-value').textContent = Number($('star-scale').value).toFixed(2) + '\u00d7';};
+$('star-scale').onchange = () => {dragging = false; action('/api/star/control', {scale: Number($('star-scale').value)});};
+
 
 const events = new EventSource('/api/events');
 events.onmessage = message => {
@@ -214,4 +297,4 @@ function cameras() {
     image.src = '/api/camera/' + role + '.jpg?t=' + Date.now();
   }
 }
-poll(); setInterval(poll, 500); cameras(); setInterval(cameras, 500);
+refreshModels(); poll(); setInterval(poll, 500); cameras(); setInterval(cameras, 500);

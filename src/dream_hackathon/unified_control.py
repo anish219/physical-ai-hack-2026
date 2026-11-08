@@ -22,6 +22,21 @@ from dream_hackathon.sequences import SequenceManager
 from dream_hackathon.so101_dashboard import Controls
 
 
+def list_models(python):
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(pathlib.Path(__file__).resolve().parent.parent), env.get("PYTHONPATH")))
+    )
+    result = subprocess.run(
+        [str(pathlib.Path(python).expanduser()), "-m", "dream_hackathon.dream_caller", "--list-models"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
 class LeaderAssignment:
     """Only the leader child changes when assignment changes; follower ownership stays in the servers."""
 
@@ -33,6 +48,7 @@ class LeaderAssignment:
         dataset_root,
         *,
         port=8083,
+        kind="so101",
         scale=1.0,
         torque=0.5,
         log_dir=pathlib.Path("/tmp"),
@@ -40,12 +56,13 @@ class LeaderAssignment:
         self.config_path, self.leader_port = config_path, leader_port
         self.arm_urls, self.dataset_root = arm_urls, dataset_root
         self.port = port
+        self.kind = kind
         self.log_dir = log_dir
         self.side = None
         self.process = None
         self.lock = threading.Lock()
-        self.settings = {side: dict(scale=scale, grip_torque_nm=torque) for side in arm_urls}
-        self.message = "SO-101 is not assigned"
+        self.settings = {side: dict(scale=scale, grip_torque_nm=torque, replay_start_speed=0.5) for side in arm_urls}
+        self.message = f"{self.kind} is not assigned"
 
     def state(self):
         side, process = self.side, self.process
@@ -71,7 +88,7 @@ class LeaderAssignment:
                 return
             previous = self.state()
             if self.side is not None:
-                self.settings[self.side] = {k: previous[k] for k in ("scale", "grip_torque_nm")}
+                self.settings[self.side] = {k: previous[k] for k in ("scale", "grip_torque_nm", "replay_start_speed")}
             if self.process is not None and self.process.poll() is None:
                 # Existing child cleanup saves any current episode and disconnects the leader.
                 # RemoteArms.close does not home or disable either follower.
@@ -82,7 +99,7 @@ class LeaderAssignment:
                 self.message = "SO-101 is not assigned; powered arms hold their current targets"
                 return
             settings = self.settings[side]
-            log_path = self.log_dir / f"unified-so101-{side}.log"
+            log_path = self.log_dir / f"unified-{self.kind}-{side}.log"
             with log_path.open("ab") as log:
                 self.process = subprocess.Popen(
                     [
@@ -90,6 +107,8 @@ class LeaderAssignment:
                         "-u",
                         "-m",
                         "dream_hackathon.so101",
+                        "--leader-kind",
+                        self.kind,
                         "--config",
                         str(self.config_path),
                         "--leader-port",
@@ -99,6 +118,10 @@ class LeaderAssignment:
                         "--remote-server",
                         self.arm_urls[side],
                         "--server-gripper-torque",
+                        "--other-arm-server",
+                        self.arm_urls["left" if side == "right" else "right"],
+                        "--replay-start-speed",
+                        str(settings["replay_start_speed"]),
                         "--dashboard-port",
                         str(self.port),
                         "--dataset-dir",
@@ -193,8 +216,15 @@ class DreamCallerProxy:
 
 
 class UnifiedController:
-    def __init__(self, nodes, leader, callers=None, *, sequence_path=None, flow_path=None):
+    def __init__(
+        self, nodes, leader, callers=None, *, sequence_path=None, flow_path=None, star=None, model_loader=None
+    ):
         self.nodes, self.leader = nodes, leader
+        self.model_loader = model_loader or (lambda: list_models("~/dream-env/bin/python"))
+        self.star = star
+        self.leaders = {"so101": leader}
+        if star is not None:
+            self.leaders["star"] = star
         self.callers = callers or {}
         self.inputs = {side: "so101" if leader.side == side else None for side in nodes}
         self.input_lock = threading.RLock()
@@ -243,6 +273,8 @@ class UnifiedController:
     def state(self):
         state = self.leader.state()
         state["assigned_side"] = self.leader.side
+        if self.star is not None:
+            state["star"] = dict(self.star.state(), assigned_side=self.star.side)
         state["arms"] = {side: node.snapshot() for side, node in self.nodes.items()}
         state["dream"] = {side: caller.snapshot() for side, caller in self.callers.items()}
         state["inputs"] = dict(self.inputs)
@@ -250,9 +282,13 @@ class UnifiedController:
         state.update(self.shared_state())
         state["sequences"] = self.sequences.snapshot()
         state["flows"] = self.flows.snapshot()
+        state["monitor_scripts"] = self.sequences.monitors.available_scripts()
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
             state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]
+        if self.star is not None and self.star.side in state["arms"]:
+            state["star"]["arm_open"] = state["arms"][self.star.side]["arm_open"]
+            state["star"]["grip_torque_nm"] = state["arms"][self.star.side]["grip_torque_nm"]
         return state
 
     def pause(self, sides):
@@ -261,8 +297,9 @@ class UnifiedController:
         for caller in self.callers.values():
             if set(sides).intersection(caller.sides):
                 caller.cancel_playback()
-        if self.leader.side in sides:
-            self.leader.action("/api/control", {"tracking": False})
+        for leader in self.leaders.values():
+            if leader.side in sides:
+                leader.action("/api/control", {"tracking": False})
         for side in sides:
             self.nodes[side].cancel_home()
             state = self.nodes[side].snapshot()
@@ -270,8 +307,8 @@ class UnifiedController:
                 self.nodes[side].control.post("/stop", {})
 
     def select_input(self, side, source):
-        if side not in self.nodes or source not in (None, "so101", "dream", "sequence", "auto"):
-            raise ValueError("Choose SO-101, Dream API, Sequences, Full Auto, or no input for an arm")
+        if side not in self.nodes or source not in (None, "so101", "star", "dream", "sequence", "auto"):
+            raise ValueError("Choose SO-101, Star arm, Dream API, Sequences, Full Auto, or no input")
         with self.input_lock:
             if self.combined_input is not None:
                 self.pause(list(self.nodes))
@@ -281,14 +318,18 @@ class UnifiedController:
                 self.publish_selection()
                 return self.state()
             self.pause([side])
-            if source == "so101":
-                previous = self.leader.side
+            if source == "star" and self.star is None:
+                raise ValueError("Star arm port is not configured")
+            for kind, leader in self.leaders.items():
+                if kind != source and leader.side == side:
+                    leader.select(None)
+            if source in self.leaders:
+                leader = self.leaders[source]
+                previous = leader.side
                 if previous is not None and previous != side:
                     self.pause([previous])
                     self.inputs[previous] = None
-                self.leader.select(side)
-            elif self.leader.side == side:
-                self.leader.select(None)
+                leader.select(side)
             self.inputs[side] = source
             self.publish_selection()
             return self.state()
@@ -300,8 +341,9 @@ class UnifiedController:
             if source == self.combined_input:
                 return self.state()
             self.pause(list(self.nodes))
-            if self.leader.side is not None:
-                self.leader.select(None)
+            for leader in self.leaders.values():
+                if leader.side is not None:
+                    leader.select(None)
             self.inputs = dict.fromkeys(self.nodes)
             self.combined_input = source
             self.publish_selection()
@@ -312,15 +354,16 @@ class UnifiedController:
             self.pause([side])
             return self.nodes[side].return_zero()
 
-    def leader_action(self, path, body):
+    def leader_action(self, path, body, kind="so101"):
         with self.input_lock:
-            if self.leader.side is None or self.inputs[self.leader.side] != "so101":
-                raise ValueError("Choose SO-101 as an arm's input first")
-            if body.get("tracking"):
-                self.nodes[self.leader.side].cancel_home()
+            leader = self.leaders.get(kind)
+            if leader is None or leader.side is None or self.inputs[leader.side] != kind:
+                raise ValueError(f"Choose {kind} as an arm's input first")
+            if body.get("tracking") or body.get("replay_requested"):
+                self.nodes[leader.side].cancel_home()
             if "grip_torque_nm" in body:
-                self.nodes[self.leader.side].set_torque(body["grip_torque_nm"])
-            return self.leader.action(path, body)
+                self.nodes[leader.side].set_torque(body["grip_torque_nm"])
+            return leader.action(path, body)
 
     def set_arm_torque(self, side, torque):
         if side not in self.nodes:
@@ -399,8 +442,10 @@ class UnifiedController:
             elif action == "stop":
                 self.flows.runs[selection].stop()
             elif action == "go":
-                selected = self.combined_input == "auto" if selection == "both" else (
-                    self.combined_input is None and self.inputs[selection] == "auto"
+                selected = (
+                    self.combined_input == "auto"
+                    if selection == "both"
+                    else (self.combined_input is None and self.inputs[selection] == "auto")
                 )
                 if not selected:
                     raise ValueError("Select Full Auto on the main tab for this arm selection")
@@ -423,8 +468,9 @@ class UnifiedController:
             for caller in self.callers.values():
                 if side in caller.sides:
                     caller.cancel_playback()
-        if not enabled and side == self.leader.side:
-            self.leader.action("/api/kill", {})
+        assigned = next((leader for leader in self.leaders.values() if leader.side == side), None)
+        if not enabled and assigned is not None:
+            assigned.action("/api/kill", {})
         else:
             result = self.nodes[side].power(enabled)
             if result["problems"]:
@@ -467,6 +513,14 @@ class UnifiedPage:
                     from dream_hackathon.demo_strategy import competition_graph
 
                     self.reply(200, json.dumps(competition_graph()).encode())
+                elif self.path == "/api/models":
+                    try:
+                        self.reply(200, json.dumps(controller.model_loader()).encode())
+                    except Exception as error:
+                        message = "Could not load Dream models"
+                        if not isinstance(error, subprocess.CalledProcessError):
+                            message += f": {error}"
+                        self.reply(502, json.dumps({"error": message}).encode())
                 elif self.path == "/api/events":
                     listener = queue.Queue()
                     with controller.shared_lock:
@@ -572,6 +626,8 @@ class UnifiedPage:
                         if controller.leader.side is None:
                             raise ValueError("Choose an arm to turn off")
                         controller.power(controller.leader.side, False)
+                    elif self.path in ("/api/star/control", "/api/star/reject"):
+                        controller.leader_action(self.path.replace("/star/", "/"), body, "star")
                     elif self.path in ("/api/control", "/api/reject"):
                         controller.leader_action(self.path, body)
                     else:
@@ -609,6 +665,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=pathlib.Path, default=pathlib.Path("configs/station.yaml"))
     parser.add_argument("--leader-port", required=True)
+    parser.add_argument("--star-port", default="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+    parser.add_argument("--star-dashboard-port", type=int, default=8085)
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--left-port", type=int, default=8691)
     parser.add_argument("--right-port", type=int, default=8692)
@@ -648,10 +706,26 @@ def main(argv=None):
             scale=args.translation_scale,
             torque=args.gripper_hold_torque_nm,
         )
+        star = LeaderAssignment(
+            args.config.resolve(),
+            args.star_port,
+            urls,
+            station.dataset_dir.expanduser() / "unified" / "star",
+            port=args.star_dashboard_port,
+            kind="star",
+            scale=1.0,
+            torque=args.gripper_hold_torque_nm,
+        )
         dream = DreamService(args.dream_python.expanduser(), urls, args.dream_port)
         callers = {selection: DreamCallerProxy(dream, selection) for selection in ("left", "right", "both")}
         controller = UnifiedController(
-            nodes, leader, callers, sequence_path=args.sequence_file, flow_path=args.flow_file
+            nodes,
+            leader,
+            callers,
+            sequence_path=args.sequence_file,
+            star=star,
+            model_loader=lambda: list_models(args.dream_python),
+            flow_path=args.flow_file,
         )
         page = UnifiedPage(controller, args.port)
         try:
@@ -667,6 +741,7 @@ def main(argv=None):
             controller.flows.close()
             dream.close()
             leader.close()
+            star.close()
             page.close()
     finally:
         for node in nodes.values():
