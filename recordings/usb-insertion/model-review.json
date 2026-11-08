@@ -1,0 +1,12 @@
+{
+  "samples": 101,
+  "seconds": 6.0,
+  "base_translation_m": [
+    -0.003203856667211624,
+    -0.0026702673673439647,
+    -0.028012338879910725
+  ],
+  "start_error_rad": 0.0,
+  "max_joint_offset_rad": 0.20736856404752912,
+  "hardware_commands": 0
+}
