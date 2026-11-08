@@ -72,18 +72,18 @@ class RemoteArms:
         pass
 
 
-def remote_cameras(base):
+def remote_cameras(base, *, side=None, other_base=None):
     """Borrow server JPEG streams for the existing recorder, rather than reopening physical cameras."""
     from dream_hackathon import cameras
 
     class RemoteCamera:
-        def __init__(self, path, width, height):
-            self.path, self.size = path, (width, height)
+        def __init__(self, camera_base, path, width, height):
+            self.base, self.path, self.size = camera_base, path, (width, height)
             self.latest()
 
         def latest(self):
             try:
-                with urllib.request.urlopen(base + self.path, timeout=5) as response:
+                with urllib.request.urlopen(self.base + self.path, timeout=5) as response:
                     frame = cv2.imdecode(np.frombuffer(response.read(), np.uint8), cv2.IMREAD_COLOR)
                 if frame is None:
                     raise ValueError("Invalid camera JPEG")
@@ -97,6 +97,7 @@ def remote_cameras(base):
     def open_cameras(configs, width, height):
         return {
             cfg.role: RemoteCamera(
+                other_base if other_base and cfg.role == ("wrist_r" if side == "left" else "wrist_l") else base,
                 "/overhead.jpg" if cfg.role == "overhead" else "/wrist.jpg",
                 width,
                 height,

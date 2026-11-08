@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hillclimb · Bonus feed</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #11151d; color: #edf1f7; }
+  body { max-width: 1080px; margin: 40px auto; padding: 0 24px; }
+  h1 { margin-bottom: 8px; font-size: 30px; } p { color: #aeb9cb; line-height: 1.5; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 22px 0; }
+  .row[hidden] { display: none; }
+  button, a.button { background: #abd8ff; color: #102030; border: 0; border-radius: 7px; padding: 12px 18px; font: inherit; cursor: pointer; text-decoration: none; }
+  button:disabled { opacity: .45; cursor: default; }
+  .card { background: #1b2230; border: 1px solid #344055; border-radius: 10px; padding: 18px; margin-top: 18px; }
+  .label { color: #9eb0c8; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+  #status { font-weight: 600; } #error { color: #ffb0a8; white-space: pre-wrap; }
+  video { width: 100%; max-height: 55vh; background: #080b10; border-radius: 8px; }
+  code { overflow-wrap: anywhere; } #saved { max-width: 320px; width: 100%; border-radius: 5px; }
+  #log { max-height: 120px; overflow: auto; font-size: 13px; white-space: pre-wrap; color: #becbde; }
+</style>
+<h1>Hillclimb bonus feed</h1>
+<p id="description"></p>
+<div class="row" id="publisher-controls">
+  <button id="share">Share dashboard tab</button>
+  <button id="stop" disabled>Stop sharing</button>
+  <a class="button" href="/?viewer=1" target="_blank" rel="noopener">Open spectator</a>
+</div>
+<div class="card">
+  <div class="label">LiveKit · local WebRTC video</div>
+  <p id="status">Disconnected</p>
+  <video id="video" autoplay playsinline muted></video>
+  <p id="media">No video track yet.</p>
+</div>
+<div class="card">
+  <div class="label">Dimensional · SQLite recording</div>
+  <p id="recording">Loading recorder…</p>
+  <p><code id="database"></code></p>
+  <p>Saved by <code>dimos.memory.blobstore.sqlite.SqliteBlobStore</code></p>
+  <a id="saved-link" href="/api/latest.jpg" target="_blank" hidden><img id="saved" alt="Latest received frame read back from the Dimensional database"></a>
+  <p id="saved-caption">The spectator saves a received video frame every five seconds.</p>
+</div>
+<p id="error" role="alert"></p>
+<pre id="log"></pre>
+<script src="/livekit-client.js"></script>
+<script src="/app.js"></script>
+</html>
