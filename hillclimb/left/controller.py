@@ -365,7 +365,7 @@ class LeftController:
         self._job_result = None
         self._job = threading.Thread(target=run, name=f"left-{kind}", daemon=True)
         self._job.start()
-        self.log.write("job_start", kind=kind, state=self.state, tower=len(self.tower))
+        self.log.write("job_start", kind=kind, state=self.state, tower_count=len(self.tower))
 
     def _finish_job(self) -> dict:
         res, self._job_result = self._job_result or {}, None
@@ -390,6 +390,9 @@ class LeftController:
         self.faults = 0
         grew = self._confirm(res, before)
         if grew:
+            base = [b for b in (res.get("tower") or [])[:1] if b != res.get("placed_id")]
+            if not self.tower and base:  # the backend built on a block already lying on the table: the base counts as level 1
+                self.tower.append({"id": base[0], "t": round(self.clock(), 2), "level": 1, "base": True})
             self.tower.append({"id": res.get("placed_id"), "t": round(self.clock(), 2), "level": len(self.tower) + 1})
             self._set("SETTLE_CHECK", "placed")
             self._settle_and_latch()
@@ -401,7 +404,7 @@ class LeftController:
         else:
             self._set("STACK", "no growth")
         self.last_step = {**res, "counted": grew}
-        self.log.write("step", **self.last_step, tower=len(self.tower))
+        self.log.write("step", **self.last_step, tower_count=len(self.tower))
         out.update(grew=grew, tower_blocks=len(self.tower))
         return out
 
