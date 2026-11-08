@@ -11,6 +11,7 @@ from dream_hackathon.usb_port_detector import DEFAULT_SCRIPTS, UsbPortDetector, 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--scripts-path", default=DEFAULT_SCRIPTS)
+    p.add_argument("--calibration", default=None)
     p.add_argument("--scene-url", default="http://127.0.0.1:8692/overhead.jpg")
     p.add_argument(
         "--wrist-url", default="http://127.0.0.1:8692/wrist.jpg", help="Empty string disables this view explicitly"
@@ -23,6 +24,11 @@ def main():
         p.error("Use positive iterations and an interval between .1 and 60 seconds")
     run_id = args.run_id or "ports-read-only-" + uuid.uuid4().hex
     detector, fetch = load_cv_detector(args.scripts_path)
+    if args.calibration:
+        import numpy as np
+
+        with np.load(args.calibration, allow_pickle=False) as loaded:
+            detector.templates = {key: loaded[key] for key in loaded.files}
     ports = UsbPortDetector(run_id, detector=detector)
     for _ in range(args.iterations):
         started = time.monotonic()

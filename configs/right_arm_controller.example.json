@@ -59,5 +59,6 @@
       "enabled": true
     }
   },
-  "poses_file": "configs/right_arm_start_poses.json"
+  "poses_file": "configs/right_arm_start_poses.json",
+  "usb_cv_calibration": "configs/usb-scene-live-20261108.npz"
 }

@@ -1,0 +1,9 @@
+{
+  "purpose": "Supplemental empty-port shape references for the current live overhead view",
+  "run_id": "right-cv-debug-1794169938",
+  "source_frame": "cv-scene-0079.jpg",
+  "source_registered_sha256": "ccaf12380f325ab4886fd5e5334d23cf05e5761b9ca52e82c859ebd97961c80e",
+  "ground_truth": "Operator confirmed all four unplugged and released; overhead image visibly shows cables on table.",
+  "changes": "Appended one empty aperture patch per port; original occupied templates and decision thresholds unchanged.",
+  "qualification": "Offline matches and limited static live testing only; not general field qualification."
+}
