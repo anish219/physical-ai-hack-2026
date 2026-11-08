@@ -44,6 +44,14 @@ ESCAPE_SLACK = 0.001  # an escaping path may let a point's clearance drop by at 
 
 # the tower(s) the current block may put the hand into (set by data_loop.Loop.block for the length of one block)
 ACTIVE: list[tuple[float, float]] = []
+# towers whose MARGIN a pick may enter (the picked block lies in that margin; Isaiah, Nov 8: picking a cube from the
+# zone is the exception): every point keeps only the bare cylinder there. Set for the pick leg, cleared after the lift.
+PICK_EXEMPT: list[tuple[float, float]] = []
+
+
+def pick_zone(x, y):
+    """The towers whose keep-out margin a block centred at (x, y) reaches into (its corner within r + the link margin)."""
+    return [(t["x"], t["y"]) for t in load() if math.hypot(t["x"] - x, t["y"] - y) < t["r"] + LINK_MARGIN + R_BLOCK]
 
 
 def _since():
@@ -156,7 +164,8 @@ def check(op, nodes, tag, opening=0.095, active=None, hand=True):
             hand = op.kin._ko_hand
             for tw in towers:
                 exempt = any(math.hypot(tw["x"] - ax, tw["y"] - ay) < SAME_TOWER for ax, ay in act)
-                mg = np.where(hand, HAND_MARGIN, LINK_MARGIN)
+                pick_ex = any(math.hypot(tw["x"] - px, tw["y"] - py) < 1e-3 for px, py in PICK_EXEMPT)
+                mg = np.where(hand, HAND_MARGIN, LINK_MARGIN) * (0.0 if pick_ex else 1.0)  # the pick zone: bare cylinder only
                 d = np.hypot(P[:, 0] - tw["x"], P[:, 1] - tw["y"]) - tw["r"]
                 clear = np.maximum(d - mg, P[:, 2] - (tw["top"] + mg))
                 if exempt or not hand_on:

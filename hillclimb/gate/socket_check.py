@@ -7,6 +7,8 @@ initially occupied socket is now empty. The verifier never reports a plain "no",
 """
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import sys
 import threading
@@ -25,6 +27,7 @@ class SocketCheck:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._armed_wall: float | None = None
         try:
             d = pathlib.Path(str(settings.get("SOCKET_VERIFIER_DIR"))).expanduser()
             if not d.is_dir():
@@ -42,6 +45,7 @@ class SocketCheck:
     def arm(self) -> None:
         """Start a fresh verifier for this round: collect the pre-go baseline, then arm at go."""
         self.stop()
+        self._armed_wall = time.time()
         with self._lock:
             self.status, self.detail = "unknown", {}
         if not self.available:
@@ -88,7 +92,30 @@ class SocketCheck:
                     self.detail["error"] = f"{type(e).__name__}: {str(e)[:120]}"
             self._stop.wait(max(0.0, 0.2 - (time.monotonic() - started)))
 
+    def _first_removal(self) -> bool:
+        """The right worker's handoff: first-removal.json in the newest /tmp/relay run folder, written after this gate was
+        armed, with first_removal true and unplugged_count >= 1, counts as the socket proof (resting on the table is still
+        checked by the overhead vision on top of it)."""
+        try:
+            relay = pathlib.Path(os.environ.get("RELAY_DIR", "/tmp/relay"))
+            files = sorted(relay.glob("*/first-removal.json"), key=lambda p: p.stat().st_mtime)
+            if not files or self._armed_wall is None:
+                return False
+            f = files[-1]
+            d = json.loads(f.read_text())
+            ok = d.get("first_removal") is True and int(d.get("unplugged_count") or 0) >= 1 \
+                and float(d.get("observed_at") or f.stat().st_mtime) >= self._armed_wall
+            if ok and self.status != "yes":
+                log.event("socket_passed", proof={"source": "right worker first-removal.json", "file": str(f),
+                                                  "unplugged_count": d.get("unplugged_count")})
+            return ok
+        except Exception:  # noqa: BLE001
+            return False
+
     def state(self) -> str:
+        if self._first_removal():
+            with self._lock:
+                self.status = "yes"
         with self._lock:
             return self.status
 

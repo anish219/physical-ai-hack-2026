@@ -175,6 +175,9 @@ class RunnerBackend:
         try:
             self._ensure_runner()
             t = self.t
+            held = self.set_down_held()  # a block in the jaws at the start (a stop mid-lift): set it down before anything else
+            if held is not None and not held.get("ok"):
+                return self._note(ok=False, what="prepare", why=held["why"])
             self._unfold_from_rest()
             t.multi_look(None)
             T.do_scatter_setup(t)
@@ -184,6 +187,63 @@ class RunnerBackend:
             return self._note(ok=True, what="prepare", planned_moves=n, spot=self.spot, blocks=sorted(t.belief))
         except BaseException as e:  # noqa: BLE001
             return self._fail("prepare", e)
+
+    def set_down_held(self, dry=False):
+        """A block held at the start (grip_holding, or grip and goal_grip both under 0.75): the runner's own set-back
+        (night_setback): straight down at a table spot with the place's legality checks, open, back off 6 cm up, then
+        the look pose. The spot: straight below the hand when the records show it clear (a stop mid-lift is over the
+        block's own source), else the nearest free spot. None when nothing is held; else a dict (ok False: no legal
+        set-down). dry=True plans only and moves nothing."""
+        import numpy as np
+        st = O.arm_state()
+        if not (st.get("grip_holding") or (st["grip"] < 0.75 and st["goal_grip"] < 0.75)):
+            return None
+        t = self.t
+        bid = "held#1"
+        q0 = np.array(st["q"]) + t.op.dq
+        t.op.st["target"] = list(q0)
+        tip, yaw_deg = t.op.tip(q0)
+        known = T.world_from_records()  # everything placed and standing, as obstacles
+        t.belief = {k: dict(b) for k, b in known.items()}
+        gh = O.GRIP_TIP - O.TABLE_Z  # the normal grasp: fingertips 15 mm over the block's bottom
+        t.belief[bid] = {"x": float(tip[0]), "y": float(tip[1]), "yaw": math.radians(yaw_deg), "level": 0, "z0": O.TABLE_Z,
+                         "lying": False, "iou": 1.0, "edge": False, "t_seen": _wall.time()}
+        t.op.held = (bid, gh)
+        t.held_ext = D.ext(t.belief[bid])
+        R = t.op.kin.fk(q0)[1]
+        others = [(b["x"], b["y"]) for k, b in t.belief.items() if k != bid]
+        rings = [(float(tip[0] + r * math.cos(a)), float(tip[1] + r * math.sin(a))) for r in (0.03, 0.06, 0.09, 0.12, 0.15)
+                 for a in np.linspace(0, 2 * math.pi, 12, endpoint=False)]
+        cands = [(float(tip[0]), float(tip[1]))] + [c for c in rings if 0.17 <= c[0] <= 0.40 and abs(c[1]) <= 0.145]
+        tried, pl, spot = [], None, None
+        for x, y in cands:
+            if any(math.hypot(x - ox, y - oy) < 0.07 for ox, oy in others):
+                continue
+            t.belief[bid].update(x=x, y=y)
+            pl, _k, why = t.legal_place(bid, q0, R, (x, y, math.radians(yaw_deg), O.TABLE_Z, None), gh)
+            tried.append(f"({x * 100:.1f}, {y * 100:.1f}): {'ok' if pl is not None else str(why)[:60]}")
+            if pl is not None:
+                spot = (x, y)
+                break
+        if pl is None:
+            t.op.held = None
+            return self._note(ok=False, what="set_down_held", why="holding a block at start: no legal set-down", tried=tried[:8])
+        if dry:
+            t.op.held = None
+            return self._note(ok=True, what="set_down_held", dry=True, spot=[round(spot[0] * 100, 1), round(spot[1] * 100, 1)],
+                              nodes=len(pl.nodes), tip_z_mm=round(float(t.op.tip(pl.nodes[-1][0])[0][2]) * 1000), tried=tried[:8])
+        t.go(pl, D.GRIP_CLOSE, "set back", "down")
+        t.release(O.arm_state())
+        t.op.held = None
+        t.held_ext = 0.0
+        back = O.Plan(t.op, np.array(t.op.st["target"]), 0.08)
+        back.R = pl.R
+        back.to(t.op.tip(pl.nodes[-1][0])[0] + [0, 0, 0.06], yaw_deg, 0.3, "back off", line=0.01, keep=True)
+        back.check(skip=bid)
+        t.go(back, 0.8, "back off", "up")
+        t.to_pose(O.LOOK_TIP, "look")
+        t.belief = {}  # the looks that follow see the table afresh
+        return self._note(ok=True, what="set_down_held", spot=[round(spot[0] * 100, 1), round(spot[1] * 100, 1)])
 
     def place_next(self, scene=None, deadline_s=120.0):
         """One more block on the tower: the planned clearing moves, then the next stack place. dict, never raises."""

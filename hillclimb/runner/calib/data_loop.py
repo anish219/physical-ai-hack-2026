@@ -1220,6 +1220,9 @@ class Loop:
         top = top_of(self.belief[sup]) if sup else TABLE_Z
         from hillclimb.runner.calib import keepout as KO
         KO.ACTIVE[:] = ([(src["x"], src["y"])] if bot(src) > TABLE_Z + 0.005 else []) + ([(tx, ty)] if sup else [])
+        KO.PICK_EXEMPT[:] = KO.pick_zone(src["x"], src["y"])  # picking a cube from a tower's margin: bare cylinder only, until the lift
+        if KO.PICK_EXEMPT:
+            status(f"{colour}: in the keep-out margin of the tower(s) {[(round(x * 100, 1), round(y * 100, 1)) for x, y in KO.PICK_EXEMPT]}: the pick keeps out of the bare cylinder only")
         q0 = self.start_q()
         corr = self.correction(tlevel, tx, ty)  # aim off by the learned bias at this level and place (mm, arm frame)
         ax, ay = tx - corr[0] / 1000, ty - corr[1] / 1000
@@ -1287,6 +1290,7 @@ class Loop:
         lift = self.plan_lift(np.array(op.st["target"]), pl.R, math.degrees(src["yaw"]), colour)
         self.go(lift, GRIP_CLOSE, "lift", "up")
         mark("lift")
+        KO.PICK_EXEMPT.clear()  # lifted out of the zone: every margin again
         s = arm_state()
         T1 = now()
         held_ok = s["grip"] >= GRIP_HELD

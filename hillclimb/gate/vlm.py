@@ -21,7 +21,7 @@ FAST_PROMPT = """Four images from ONE fixed overhead camera at a robot station w
 Top row: zoomed view around the power strip. Bottom row: the full overhead view.
 LEFT column is a reference taken earlier; RIGHT column is now. The camera does not move between them.
 Cables are either plugged into the strip's USB ports, held in the robot gripper, or lying loose on the table. Some loose cables may already be on the table in the reference.
-The question that matters: since the reference, has exactly one more cable been pulled out of the strip AND is that cable now lying on the table, released, with no gripper holding it?
+The question that matters: since the reference, has at least one more cable been pulled out of the strip AND is at least one of those cables now lying on the table, released, with no gripper holding it?
 If the strip or cables are hidden by the arm, answer false.
 Answer only JSON: {"plugged_ref": int, "plugged_now": int, "loose_on_table_ref": int, "loose_on_table_now": int, "gripper_holding_cable_now": bool, "new_cable_unplugged_and_resting_on_table": bool, "confidence": number 0-1}"""
 

@@ -61,3 +61,32 @@ Use a sim port that is none of the real station's ports; the runner refuses one 
 - **9 needs more blocks than fit in reach at once.** About 11 blocks are needed (7 fingers down, plus 2 helper bases, plus 2 tilted), so blocks must be fed in during the build.
 - **7 fingers down and the tilted 8 and 9 need one tower spot where both plan.** The backend does not pick that spot for the tilt yet: give `helper_spots` and build at a spot checked for both.
 - **Pace:** about 15 to 17 s per confirmed block. A re-place costs about 10 s.
+
+## Merged with the real-arm runner (Nov 8, 12:35 snapshot of pah-hackathon calib/, now frozen)
+Base: the real-arm runner's current files. Their real-arm-tested additions are in:
+- the keep-out cylinder (calib/keepout.py, checked in every stream and at plan time);
+- PICK_FAST, LAST_COLOURS, EXTRA_LOOKS and LOOP_MULTI, TOWER_AREA and LOOK_TIP;
+- the 8 cm carry over a support (SUP_CLEAR);
+- world_override add and confirm;
+- standing stacks seeded into the belief before looks;
+- belief overlays, night_reach, and night_top's tilted top place.
+
+Re-applied on top:
+- G1 to G9;
+- TALL_KNOWN_BIG;
+- GATE_FILE and BIAS_FILES (gate wait and learning);
+- HILLCLIMB_RECORD (off by default);
+- the HILLCLIMB_RUNS run root, with status() and take_token() creating their folders;
+- the vendored block finder;
+- the external vision vets as no-ops;
+- no laptop tunnels or copy-back;
+- the tbrun fallback to the runner's own planner.
+
+Harness additions:
+- opstack.ABORT: backend.hold() sets it, and every streamed goal and stepped move stops on it.
+- keepout.check(hand=False) at plan time: only the links are checked there, because a plan's own target tower is not marked ACTIVE until its block starts.
+- The keep-out escape rule: a path that starts inside a margin may only move outward, by at most 1 mm worse per step.
+- keepout.PICK_EXEMPT: a pick of a block in a tower's margin keeps out of the bare cylinder only, until the lift.
+- backend.set_down_held(): a block held at the start is set back down before anything else.
+
+The keep-out file is <HILLCLIMB_RUNS>/station/tall/keepout.json, or each sim's own folder in sim mode.

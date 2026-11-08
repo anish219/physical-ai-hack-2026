@@ -521,6 +521,27 @@ class LeftController:
             tmp.replace(self.state_file)
         except Exception as e:  # noqa: BLE001
             self.health["save"] = repr(e)[:200]
+        self._publish()
+
+    def _publish(self) -> None:
+        """left-status.json where the right worker and the team launcher look: /tmp/relay/ and the newest relay run folder."""
+        try:
+            relay = pathlib.Path(os.environ.get("RELAY_DIR", "/tmp/relay"))
+            if not relay.is_dir():
+                return
+            g = self.gate_cache or {}
+            body = json.dumps({"version": 1, "side": "left", "state": self.state, "reason": self.reason,
+                               "tower_blocks": len(self.tower), "active_goal": self.active_goal() if self.go_wall else None,
+                               "time_left_s": self.time_left(), "gate_open": self.gate_open(),
+                               "gate_bypassed": bool(self.settings.gate_bypass and self.settings.mode == "practice"),
+                               "gate_known": g.get("known"), "time": self.clock()}, default=str)
+            runs = [p for p in relay.iterdir() if p.is_dir()]
+            for d in [relay] + ([max(runs, key=lambda p: p.stat().st_mtime)] if runs else []):
+                tmp = d / "left-status.json.tmp"
+                tmp.write_text(body)
+                tmp.replace(d / "left-status.json")
+        except Exception as e:  # noqa: BLE001
+            self.health["publish"] = repr(e)[:160]
 
     def _load(self) -> None:
         try:

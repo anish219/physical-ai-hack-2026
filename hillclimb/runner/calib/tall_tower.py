@@ -387,10 +387,12 @@ class Tall(D.Loop):
             if outer:
                 from hillclimb.runner.calib import keepout as KO
                 KO.ACTIVE.clear()  # the hand may enter a tower only inside the block that works on it
+                KO.PICK_EXEMPT.clear()
                 self.belief_overlay(f"after {colour}")
         except (D.CycleFail, SystemExit) as e:
             from hillclimb.runner.calib import keepout as KO
             KO.ACTIVE.clear()
+            KO.PICK_EXEMPT.clear()
             self.failure(colour, target, e)
             if outer and self.knock_check(colour, "failed move")[0]:
                 raise D.Fatal(f"a block that was not moved changed in the overhead during the failed {colour} move") from e
