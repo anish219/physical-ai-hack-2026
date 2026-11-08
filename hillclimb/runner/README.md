@@ -41,6 +41,7 @@ Imports were rewritten to `hillclimb.runner.*`. Runs, records and status go to `
 | G9 | A weak after-place fit within 2 cm of the target is accepted |
 | `TALL_KNOWN_BIG` | Piece sizes per table, as a JSON override: `{"green": false, "orange": false}` for all-small cubes. **Set it to the venue's real pieces**, because a wrong entry forces the wrong shape on every block of that colour |
 | `GATE_FILE` | The first pick or push waits until the file exists (the USB gate). Looks and planning run before it. `place_next()` refuses at once while the file is missing |
+| `HILLCLIMB_RECORD` | `1`: every move is saved as an episode through the recorder at `REC_URL`, and a recorder error is only logged. Anything else (the match default): the recorder is never called, so a missing recorder can't fail a move |
 | `BIAS_FILES` | The per-level place correction also learns from these record files (capped at 8 mm) |
 | Tilt helper | Levels 8 and 9 tilted 40 deg from a staged 2-block helper stack, with an arm-link clearance check and a safe way out of the tilt |
 

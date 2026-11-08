@@ -1,53 +1,57 @@
-"""A small client for one arm server (the team's 8691 left server, or a station sim on its own port).
+"""Arm access for the Dream backend.
 
-Only GET /state, GET /overhead.jpg, GET /wrist.jpg, POST /target, POST /move and POST /stop are used. Every call has a
-timeout; callers get an exception they can catch, never a hang.
+The backend runs on the controller's hillclimb.common.arm.ArmClient (its motion calls pass the controller's gate
+guard). That client returns None or False on failure; `Arm` wraps it so the loop's threads get an exception they
+catch and count, never a silent None. `Arm.from_url` builds one for standalone sim tests.
 """
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
-
-REAL_RIGHT_PORTS = (8692,)
-FORBIDDEN_PORTS = (8081, 8084, 8697, 18081, 18084)
+FORBIDDEN_PORTS = (8692, 8081, 8084, 8697, 18081, 18084)
 
 
-class ArmClient:
-    def __init__(self, url: str, timeout: float = 5.0) -> None:
-        self.url = url.rstrip("/")
-        self.timeout = timeout
-        port = int(self.url.rsplit(":", 1)[-1].split("/")[0]) if ":" in self.url.split("//", 1)[-1] else 80
-        if port in REAL_RIGHT_PORTS + FORBIDDEN_PORTS:
-            raise ValueError(f"refusing to drive {self.url}: that port is not the left arm")
+class ArmError(RuntimeError):
+    pass
 
-    def _req(self, path: str, body: dict | None = None, timeout: float | None = None) -> bytes:
-        rq = urllib.request.Request(
-            self.url + path,
-            data=None if body is None else json.dumps(body).encode(),
-            headers={} if body is None else {"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(rq, timeout=timeout or self.timeout) as r:
-            return r.read()
+
+class Arm:
+    def __init__(self, client) -> None:
+        self.c = client
+        base = getattr(client, "base", "")
+        port = base.rsplit(":", 1)[-1].split("/")[0] if base.count(":") >= 2 else ""
+        if port.isdigit() and int(port) in FORBIDDEN_PORTS:
+            raise ValueError(f"refusing to drive {base}: that port is not the left arm")
+
+    @classmethod
+    def from_url(cls, url: str) -> Arm:
+        from hillclimb.common.arm import ArmClient  # noqa: PLC0415
+        return cls(ArmClient(url))
+
+    @property
+    def base(self) -> str:
+        return getattr(self.c, "base", "")
 
     def state(self) -> dict:
-        return json.loads(self._req("/state"))
+        s = self.c.state()
+        if s is None:
+            raise ArmError(getattr(self.c, "last_error", None) or "no /state")
+        return s
 
     def frame(self, name: str) -> bytes:
-        return self._req(f"/{name}.jpg")
+        f = self.c.frame(name)
+        if f is None:
+            raise ArmError(getattr(self.c, "last_error", None) or f"no /{name}.jpg")
+        return f[0] if isinstance(f, tuple) else f
 
-    def target(self, q, grip: float) -> None:
-        """Direct target, no speed walk (what Dream's rows use)."""
-        self._req("/target", {"q": [float(v) for v in q], "grip": float(grip)})
+    def target(self, q, grip: float) -> bool:
+        """False when refused (gate guard) or failed; the loop counts it, the arm keeps its last target."""
+        return bool(self.c.target([float(v) for v in q], float(grip)))
 
-    def move(self, q, grip: float, rate: float = 0.6) -> None:
-        """A walked move at `rate` (rad/s cap), for the retreat and start-pose moves."""
-        self._req("/move", {"q": [float(v) for v in q], "grip": float(grip), "rate": float(rate)})
+    def move(self, q, grip: float, rate: float = 0.6) -> bool:
+        return bool(self.c.move([float(v) for v in q], float(grip), rate=float(rate)))
 
     def stop(self) -> None:
-        """Hold where the arm is."""
         try:
-            self._req("/stop", {})
-        except (urllib.error.URLError, OSError, ValueError):
+            self.c.stop()
+        except Exception:  # noqa: BLE001
             pass

@@ -9,6 +9,7 @@ The gate opens when GateCore says so, and stays open (latched) until the next /g
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 import traceback
@@ -37,6 +38,55 @@ class Gate:
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._restore()
+
+    # ------------------------------------------------------------------ persistence
+    # The round's gate state lives on disk, so a restart can neither re-close an open (latched) gate nor open a
+    # shut one: armed, open, latch time, strip box, the reference frame and the jaw releases come back as they were.
+    # Only POST /gate/arm (a new round) replaces it. The vision streak is not kept: after a restart a shut gate
+    # needs two fresh agentic yeses again, which only delays it.
+    def _state_path(self):
+        return settings.log_dir() / "gate_state.json"
+
+    def _ref_path(self):
+        return settings.log_dir() / "gate_ref.jpg"
+
+    def _save(self) -> None:
+        try:
+            with self._lock:
+                data = {"armed": self.core.armed, "armed_at": self.core.armed_at, "open": self.core.open,
+                        "latched_at": self.core.latched_at, "strip_box": self.strip_box, "ref_t": self.ref_t,
+                        "jaw_releases": list(self.jaw.tracker.releases), "saved_at": time.time()}
+            tmp = self._state_path().with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            tmp.replace(self._state_path())
+        except Exception as e:  # noqa: BLE001
+            log.event("gate_save_failed", error=f"{type(e).__name__}: {e}")
+
+    def _restore(self) -> None:
+        try:
+            data = json.loads(self._state_path().read_text())
+        except Exception:  # noqa: BLE001  (no saved round: start unarmed)
+            return
+        try:
+            if not data.get("armed"):
+                return
+            ref = self._ref_path().read_bytes() if self._ref_path().exists() else None
+            with self._lock:
+                self.core.armed, self.core.armed_at = True, float(data["armed_at"])
+                self.core.open, self.core.latched_at = bool(data.get("open")), data.get("latched_at")
+                self.strip_box = imaging.clamp_box(data.get("strip_box") or self.strip_box)
+                self.ref_jpeg, self.ref_t = ref, data.get("ref_t")
+            self.jaw.tracker.since = float(data["armed_at"])
+            self.jaw.tracker.releases = [float(r) for r in data.get("jaw_releases") or []]
+            log.event("gate_restored", open=self.core.open, armed_at=self.core.armed_at, have_ref=ref is not None)
+            if not self.core.open:
+                if ref is None:
+                    log.event("gate_restore_no_reference")  # stays shut; a new /gate/arm is needed
+                else:
+                    self.start()
+        except Exception as e:  # noqa: BLE001
+            log.event("gate_restore_failed", error=f"{type(e).__name__}: {e}")
 
     # ------------------------------------------------------------------ control
     def arm(self, body: dict | None = None) -> dict:
@@ -52,6 +102,11 @@ class Gate:
             self.last_reads, self.last_fast_answer, self.last_agentic = [], None, None
         self.jaw.reset(time.time())
         self.socket.arm()
+        try:
+            self._ref_path().write_bytes(f.jpeg)
+        except Exception as e:  # noqa: BLE001
+            log.event("gate_ref_save_failed", error=f"{type(e).__name__}: {e}")
+        self._save()
         log.event("gate_armed", ref_t=f.t, strip_box=self.strip_box)
         self.start()
         return {"ok": True, "ref_t": f.t, "strip_box": self.strip_box}
@@ -102,6 +157,8 @@ class Gate:
             except Exception:  # noqa: BLE001  (the loop survives anything; the gate just stays shut)
                 self.errors += 1
                 log.event("gate_loop_error", trace=traceback.format_exc()[-600:])
+            if self.core.armed:
+                self._save()
             if self.core.open:
                 self._stop.wait(1.0)
                 continue
@@ -141,6 +198,7 @@ class Gate:
         self._remember({"kind": "agentic", "yes": res["yes"], "ms": res["ms"], "error": res["error"], "tools": res["tools"],
                         "asked": res["asked"], "evidence": res["evidence"], "now_t": now.t})
         opened = self.core.try_open(time.time(), self.socket.state(), self.jaw.released_since(self.core.armed_at or 0.0), self._healthy())
+        self._save()
         if opened:
             log.event("gate_open", checks=self.core.checks(self.socket.state(), True, True), socket=self.socket.info())
 

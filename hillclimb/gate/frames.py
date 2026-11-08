@@ -40,8 +40,8 @@ class FrameSource:
 class HttpFrameSource(FrameSource):
     def __init__(self, url: str | None = None, poll_s: float | None = None, buffer_s: float | None = None):
         self.url = url or settings.overhead_url()
-        self.poll_s = float(poll_s or settings.get("FRAME_POLL_S"))
-        self.buffer_s = float(buffer_s or settings.get("BUFFER_S"))
+        self.poll_s = float(poll_s or settings.get("GATE_FRAME_POLL_S"))
+        self.buffer_s = float(buffer_s or settings.get("GATE_BUFFER_S"))
         self._frames: list[Frame] = []
         self._lock = threading.Condition()
         self._stop = threading.Event()
@@ -53,7 +53,7 @@ class HttpFrameSource(FrameSource):
 
     def _fetch(self) -> tuple[bytes, float | None] | None:
         try:
-            with urllib.request.urlopen(self.url, timeout=float(settings.get("HTTP_TIMEOUT_S"))) as r:
+            with urllib.request.urlopen(self.url, timeout=float(settings.get("GATE_HTTP_TIMEOUT_S"))) as r:
                 data = r.read()
                 stamp = r.headers.get("X-Stamp")
             if not data or data[:2] != b"\xff\xd8":
@@ -96,7 +96,7 @@ class HttpFrameSource(FrameSource):
         f = self.latest()
         if f is None:
             return False
-        max_age = float(settings.get("FRAME_MAX_AGE_S"))
+        max_age = float(settings.get("GATE_FRAME_MAX_AGE_S"))
         if time.time() - self._last_ok > max_age:  # no new frame arrived lately: frozen camera or dead server
             return False
         if self._clock_shared and f.stamp is not None:

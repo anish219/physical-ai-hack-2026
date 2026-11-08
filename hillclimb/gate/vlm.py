@@ -95,7 +95,7 @@ def fast_check(composite_jpeg: bytes, timeout_s: float | None = None) -> dict:
     try:
         if not composite_jpeg:
             raise VlmError("no composite")
-        j = _post({"model": settings.get("MODEL"), "reasoning_effort": "none", "response_format": {"type": "json_object"},
+        j = _post({"model": settings.get("VLM_MODEL"), "reasoning_effort": "none", "response_format": {"type": "json_object"},
                    "max_completion_tokens": 400,
                    "messages": [{"role": "user", "content": [{"type": "text", "text": FAST_PROMPT},
                                                              {"type": "image_url", "image_url": {"url": _data_url(composite_jpeg)}}]}]},
@@ -134,7 +134,7 @@ def agentic_check(source, ref_jpeg: bytes, now_t: float, strip_box, budget_s: fl
                                                  {"type": "image_url", "image_url": {"url": _data_url(comp)}}]}]
         for turn in range(max_tools + 1):
             force = turn == max_tools
-            j = _post({"model": settings.get("MODEL"), "reasoning_effort": "none", "max_completion_tokens": 600, "messages": messages,
+            j = _post({"model": settings.get("VLM_MODEL"), "reasoning_effort": "none", "max_completion_tokens": 600, "messages": messages,
                        "tools": TOOLS, "parallel_tool_calls": False,
                        "tool_choice": {"type": "function", "function": {"name": "submit_verdict"}} if force else "required"},
                       deadline - time.time())

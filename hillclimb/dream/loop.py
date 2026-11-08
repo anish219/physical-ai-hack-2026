@@ -4,8 +4,9 @@ Threads:
 - observer: reads the arm's /state, /overhead.jpg and /wrist.jpg at obs_hz and hands them to the Dream client;
 - worker: the only thread that calls get_action() (one call at a time, as the client requires). While running it
   fetches chunks back to back as rows run out; while idle it makes a keep-warm call every 30 s and discards the rows;
-- player: plays rows to /target at hz. A new chunk takes over at the row due now (rows count from when its request
-  went out), never replaying row 0. A row filter (the keep-out) may refuse a row; the arm then keeps its last target.
+- player: plays rows to /target at hz. Each chunk plays from its row 0, like the team's caller that the sim
+  experiments ran with; the next chunk is fetched while the current one plays (when about 1.5 s of rows are left), so
+  there is no pause between chunks. A row filter (the keep-out) may refuse a row; the arm then keeps its last target.
 
 Dream refusals never escape: pool_warming and capacity refusals set status "warming" and retry after retry_after_s;
 an expired session restarts the episode; timeouts and network errors retry. Only a refused key or checkpoint stops
@@ -22,10 +23,15 @@ from collections.abc import Callable
 import cv2
 import numpy as np
 
-from .arm import ArmClient
-from .wording import hold_prompt
+from .arm import Arm
 
 WARM_EVERY_S = 30.0
+PREFETCH_S = 1.5
+
+
+def hold_prompt(checkpoint: str) -> str:
+    """The do-nothing prompt for keep-warm calls; their rows are never played."""
+    return "hold the arm still"
 
 
 def _jpeg(img: np.ndarray) -> bytes:
@@ -36,7 +42,7 @@ def _jpeg(img: np.ndarray) -> bytes:
 
 
 class DreamLoop:
-    def __init__(self, arm: ArmClient, checkpoint: str, *, hz: float = 20.0, obs_hz: float = 10.0,
+    def __init__(self, arm: Arm, checkpoint: str, *, hz: float = 20.0, obs_hz: float = 10.0,
                  width: int = 320, height: int = 180, log: Callable[[dict], None] | None = None,
                  client_factory: Callable[[str, float], object] | None = None) -> None:
         self.arm, self.checkpoint, self.hz, self.obs_hz = arm, checkpoint, hz, obs_hz
@@ -50,7 +56,8 @@ class DreamLoop:
         self.prompt = hold_prompt(checkpoint)
         self.running = False
         self.row_filter: Callable[[list[float], dict], bool] | None = None  # True = send the row
-        self.chunk: tuple[float, list[list[float]]] | None = None  # (request time, rows)
+        self.chunk: tuple[float, list[list[float]]] | None = None  # (time it started playing, rows)
+        self.next_rows: list[list[float]] | None = None
         self.executed = 0
         self.last_obs = None
         self.last_state: dict = {}
@@ -100,6 +107,7 @@ class DreamLoop:
         with self.lock:
             self.prompt = prompt
             self.chunk = None
+            self.next_rows = None
             self.executed = 0
             if self.client is not None:
                 try:
@@ -114,6 +122,7 @@ class DreamLoop:
         with self.lock:
             self.running = False
             self.chunk = None
+            self.next_rows = None
             self.prompt = hold_prompt(self.checkpoint)
         self.arm.stop()
         self.log({"ev": "stop"})
@@ -240,15 +249,17 @@ class DreamLoop:
                 self.stop_all.wait(0.2)
                 continue
             if self.running:
-                need = self.chunk is None or self._remaining() <= int(self.hz * 1.2)
+                need = self.next_rows is None and (self.chunk is None or self._remaining() <= int(self.hz * PREFETCH_S))
                 if not need:
                     self.stop_all.wait(0.03)
                     continue
-                t_req = time.monotonic()
                 rows = self._call()
                 if rows is not None and self.running:
                     with self.lock:
-                        self.chunk = (t_req, rows)
+                        if self.chunk is None:
+                            self.chunk = (time.monotonic(), rows)
+                        else:
+                            self.next_rows = rows
                 continue
             # idle: warm up (first call) or keep warm
             if self.status["mode"] in ("opening", "warming") or time.time() - last_warm > WARM_EVERY_S:
@@ -266,9 +277,9 @@ class DreamLoop:
     def _remaining(self) -> int:
         if self.chunk is None:
             return 0
-        t_req, rows = self.chunk
-        due = int((time.monotonic() - t_req) * self.hz)
-        return max(0, len(rows) - due)
+        t_play, rows = self.chunk
+        done = int((time.monotonic() - t_play) * self.hz)
+        return max(0, len(rows) - done)
 
     def _play(self) -> None:
         period = 1.0 / self.hz
@@ -277,8 +288,11 @@ class DreamLoop:
             row = None
             with self.lock:
                 if self.running and self.chunk is not None:
-                    t_req, rows = self.chunk
-                    i = int((t0 - t_req) * self.hz)
+                    t_play, rows = self.chunk
+                    i = int((t0 - t_play) * self.hz)
+                    if i >= len(rows) and self.next_rows is not None:
+                        self.chunk, self.next_rows = (t0, self.next_rows), None
+                        t_play, rows, i = t0, self.chunk[1], 0
                     if i < len(rows):
                         row = rows[i]
                 st = self.last_state
@@ -291,8 +305,10 @@ class DreamLoop:
                         send = True
                 if send:
                     try:
-                        self.arm.target(row[:6], row[6])
-                        self.status["rows_sent"] += 1
+                        if self.arm.target(row[:6], row[6]):
+                            self.status["rows_sent"] += 1
+                        else:
+                            self.status["rows_failed"] = self.status.get("rows_failed", 0) + 1
                     except Exception as e:  # noqa: BLE001
                         self.status["error"] = f"target: {e}"[:200]
                 else:

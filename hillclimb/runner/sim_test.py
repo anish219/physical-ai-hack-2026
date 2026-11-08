@@ -15,7 +15,7 @@ import sys
 import time
 import urllib.request
 
-from hillclimb.runner.backend import RunnerBackend
+from hillclimb.runner import make_backend
 
 PORT = int(os.environ["RUNNER_SIM_PORT"])
 BASE = f"http://127.0.0.1:{PORT}"
@@ -38,7 +38,10 @@ def moved(a, b):
 def main():
     levels = int(sys.argv[sys.argv.index("--levels") + 1]) if "--levels" in sys.argv else 8
     out = {"port": PORT}
-    be = RunnerBackend()
+    be = make_backend({}, None)
+    if os.environ.get("SIM_TEST_DEAD_REC"):  # the recorder absent: a port nothing listens on
+        from hillclimb.runner.calib import data_loop as D
+        D.REC = "http://127.0.0.1:9"
     tr0 = truth()
     t0 = time.time()
     out["prepare"] = {k: v for k, v in be.prepare().items() if k != "tb"}
@@ -74,7 +77,7 @@ def main():
         t1 = time.time()
         r = be.place_next(deadline_s=240)
         h = tallest(truth())
-        steps.append({"i": i, "ok": r.get("ok"), "placed": r.get("placed_id"), "why": (r.get("why") or "")[:200],
+        steps.append({"i": i, "ok": r.get("ok"), "grew": r.get("grew"), "verified": r.get("verified"), "placed": r.get("placed_id"), "why": (r.get("why") or "")[:200],
                       "runner_tower": r.get("tower"), "truth_tallest": h, "s": round(time.time() - t1, 1)})
         print("STEP", json.dumps(steps[-1]), flush=True)
         if not r.get("ok") and "--fail-test" not in sys.argv:

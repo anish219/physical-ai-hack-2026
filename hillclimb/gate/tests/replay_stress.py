@@ -84,12 +84,10 @@ def run_case(vids, case_id, grip):
     box = settings.get("STRIP_BOX")
     ref = frames(0.3)
     row = {"case": case_id, "t": t, "truth_now": truth(ds, g, t)}
-    # the two checks look at frames 2 s apart: (t, t + 2) when the recording goes on, else (t - 2, t), which is the
-    # same pair a live gate sees when its first yes came 2 s before this moment
-    if t + 2.0 > dur - 0.1 and t - 2.0 >= 0.5:
-        t, t_second = t - 2.0, t
-    else:
-        t_second = t + 2.0
+    # the trigger (fast, then agentic) is at t; the confirming agentic check looks at a frame 2 s later when the
+    # recording goes on, else 1.5 s earlier (a live gate's second check is newer; for scoring, only the pair matters).
+    # The gate's decision happens at the later of the two moments and is scored against the truth there.
+    t_second = t + 2.0 if t + 2.0 <= dur - 0.1 else (t - 1.5 if t - 1.5 >= 0.5 else None)
     src = ListFrameSource(frames, now_t=t, start_t=0.05, end_t=dur - 0.05)
     comp = imaging.composite(ref, src.latest().jpeg, box) if (ref and src.latest()) else None
     f = vlm.fast_check(comp)
@@ -107,8 +105,8 @@ def run_case(vids, case_id, grip):
         row["truth_decision"] = row["truth_now"]
         return row
     t2 = t_second
-    if t2 > dur - 0.1:
-        row["gate_go"] = None  # no later frame in this recording to confirm on
+    if t2 is None:
+        row["gate_go"] = None  # the recording is too short to confirm on another frame
         row["decision_t"] = t
         row["truth_decision"] = row["truth_now"]
         return row
@@ -116,8 +114,8 @@ def run_case(vids, case_id, grip):
     a2 = vlm.agentic_check(src2, ref, t2, box)
     row["agentic2"] = {k: a2[k] for k in ("yes", "ms", "error", "tools", "asked", "evidence")}
     row["gate_go"] = bool(a2["yes"])
-    row["decision_t"] = t2
-    row["truth_decision"] = truth(ds, g, t2)
+    row["decision_t"] = max(t, t2)
+    row["truth_decision"] = truth(ds, g, max(t, t2)) if t2 > t else (row["truth_now"] if truth(ds, g, t2) == row["truth_now"] else "unsure")
     return row
 
 

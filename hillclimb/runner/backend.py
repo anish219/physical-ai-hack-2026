@@ -11,6 +11,8 @@ Environment:
     GATE_FILE         the first pick or push waits until this file exists (the USB gate)
     TALL_KNOWN_BIG    piece sizes, e.g. '{"green": false, "orange": false}' for all-small cubes
     HILLCLIMB_RUNS    where sessions, records and status go (default ~/hillclimb_runs)
+    HILLCLIMB_RECORD  1: episodes go to the recorder at REC_URL (a recorder error is only logged); anything else
+                      (the match default): the recorder is never called
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ import time as _wall
 import traceback
 import urllib.request
 
+from hillclimb.runner.calib import arm_runner as AR
 from hillclimb.runner.calib import data_loop as D
 from hillclimb.runner.calib import opstack as O
 from hillclimb.runner.calib import tall_tower as T
@@ -29,8 +32,9 @@ TILT_LEVEL = 7  # tower height at which the next block needs the tilted grip (fi
 
 
 class RunnerBackend:
-    def __init__(self, sim_port=None, helper_spots=(), tilt_theta_deg=40.0, tilt_up_mm=25.0, tilt_sag_mm=25.0):
+    def __init__(self, sim_port=None, helper_spots=(), tilt_theta_deg=40.0, tilt_up_mm=25.0, tilt_sag_mm=25.0, log=None):
         self.sim_port = int(sim_port or os.environ.get("RUNNER_SIM_PORT") or 0) or None
+        self.jlog = log  # hillclimb.common.log.JsonlLog, when the controller gives one
         self.helper_spots = list(helper_spots)  # [(x, y) m]: helper stacks staged for levels 8 and 9
         self.tilt = (math.radians(tilt_theta_deg), tilt_up_mm / 1000, tilt_sag_mm / 1000)
         self.t = None  # the runner (tall_tower.Tall)
@@ -43,11 +47,18 @@ class RunnerBackend:
         self.prepared = False
         if self.sim_port:
             T.use_sim(self.sim_port, str(T._RUNS_ROOT / "sim_station" / f"p{self.sim_port}"))
+        else:  # the real station: its own local URLs (LEFT_URL, TEAM_STATE_URL, DREAM_STATE_URL, REC_URL), the wall clock
+            AR.use_backend(dict(AR.REAL), _wall)
 
     # ---- helpers
     def _note(self, **row):
         row["t"] = round(_wall.time(), 2)
         self.log.append(row)
+        if self.jlog is not None:
+            try:
+                self.jlog.write(str(row.get("what", "note")), **{k: v for k, v in row.items() if k != "tb"})
+            except Exception:  # noqa: BLE001
+                pass
         try:
             D.status("backend: " + json.dumps(row, default=str)[:400])
         except Exception:  # noqa: BLE001
@@ -102,24 +113,24 @@ class RunnerBackend:
         T0 = _wall.time()
         gate = os.environ.get("GATE_FILE")
         if gate and not os.path.exists(gate):  # never touch a block before the USB gate (and never wait on it here)
-            return {"ok": False, "placed_id": None, "why": "USB gate shut", "tower": list(self.tower), "timing": {"s": 0.0}}
+            return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": "USB gate shut", "tower": list(self.tower), "timing": {"s": 0.0}}
         try:
             if not self.prepared:
                 r = self.prepare(scene)
                 if not r.get("ok"):
-                    return {"ok": False, "placed_id": None, "why": r.get("why"), "timing": {"s": round(_wall.time() - T0, 1)}}
+                    return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": r.get("why"), "timing": {"s": round(_wall.time() - T0, 1)}}
             if len(self.tower) >= TILT_LEVEL and self.helper_spots:
                 return self._place_tilted(T0)
             t = self.t
             while _wall.time() - T0 < deadline_s:
                 if not self.moves:
                     if self.replans >= 4:
-                        return self._note(ok=False, what="place_next", placed_id=None, why="nothing left that plans",
+                        return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, why="nothing left that plans",
                                           tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
                     self.replans += 1
                     self._plan(budget=15.0)
                     if not self.moves:
-                        return self._note(ok=False, what="place_next", placed_id=None, why="no moves planned",
+                        return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, why="no moves planned",
                                           tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
                 kind, bid, tgt = self.moves.pop(0)
                 try:
@@ -137,22 +148,24 @@ class RunnerBackend:
                         tgt = (s_["x"], s_["y"], s_["yaw"], len(self.tower), self.tower[-1])
                     t.block(bid, tgt, 1, len(self.tower) + 1, "stack")
                     self.tower.append(bid)
-                    return self._note(ok=True, what="place_next", placed_id=bid, why="", tower=list(self.tower),
-                                      timing={"s": round(_wall.time() - T0, 1)})
+                    # block() returns only after the runner's own after-place and standing checks passed (a place that
+                    # is off or not standing is re-placed or raises), so a normal return is a verified place
+                    return self._note(ok=True, grew=True, verified=True, what="place_next", placed_id=bid, why="",
+                                      tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
                 except (D.NoPlan, D.NoSpot, D.CycleFail, SystemExit) as e:
                     st = O.arm_state()
                     if st["grip"] < 0.75 and st["goal_grip"] < 0.75:
-                        return self._note(ok=False, what="place_next", placed_id=None, tower=list(self.tower),
+                        return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, tower=list(self.tower),
                                           why=f"holding a block after a failed {kind} {bid}: {str(e)[:200]}",
                                           timing={"s": round(_wall.time() - T0, 1)})
                     t.op.st["target"] = None
                     self._note(ok=False, what="move", kind=kind, block=bid, why=str(e)[:300])
                     self.moves = []  # re-plan from the belief as it is now
-            return self._note(ok=False, what="place_next", placed_id=None, why="deadline", tower=list(self.tower),
+            return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, why="deadline", tower=list(self.tower),
                               timing={"s": round(_wall.time() - T0, 1)})
         except BaseException as e:  # noqa: BLE001
             r = self._fail("place_next", e)
-            return {"ok": False, "placed_id": None, "why": r["why"], "tower": list(self.tower), "timing": {"s": round(_wall.time() - T0, 1)}}
+            return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": r["why"], "tower": list(self.tower), "timing": {"s": round(_wall.time() - T0, 1)}}
 
     def _place_tilted(self, T0):
         """Levels 8 and 9: the next staged helper's top block, tilted onto the tower top (calib/tilt_helper.py)."""
@@ -170,9 +183,10 @@ class RunnerBackend:
             res = TH.tilt_place(t, bid, D.top_of(top), top["x"], top["y"], theta, up, sag, top["yaw"])
             self.used_helpers.add(k)
             self.tower.append(bid)
-            return self._note(ok=True, what="place_next", placed_id=bid, why="tilted", tower=list(self.tower), tilt=res,
+            return self._note(ok=True, grew=True, verified=False, what="place_next", placed_id=bid, why="tilted",
+                              tower=list(self.tower), tilt=res,
                               timing={"s": round(_wall.time() - T0, 1)})
-        return self._note(ok=False, what="place_next", placed_id=None, why="no staged helper with a block on top",
+        return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, why="no staged helper with a block on top",
                           tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
 
     def recover(self, scene=None, deadline_s=180.0):

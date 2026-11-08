@@ -82,7 +82,7 @@ class JawWatch:
         while not self._stop.is_set():
             started = time.time()
             try:
-                with urllib.request.urlopen(self.url, timeout=float(settings.get("HTTP_TIMEOUT_S"))) as r:
+                with urllib.request.urlopen(self.url, timeout=float(settings.get("GATE_HTTP_TIMEOUT_S"))) as r:
                     st = json.loads(r.read())
                 grip = st.get("grip")
                 with self._lock:
@@ -100,7 +100,7 @@ class JawWatch:
             self.tracker.reset(since)
 
     def fresh(self) -> bool:
-        return time.time() - self._last_ok <= float(settings.get("STATE_MAX_AGE_S"))
+        return time.time() - self._last_ok <= float(settings.get("GATE_STATE_MAX_AGE_S"))
 
     def released_since(self, t: float) -> bool:
         with self._lock:
