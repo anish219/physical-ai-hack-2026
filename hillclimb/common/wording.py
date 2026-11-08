@@ -81,5 +81,11 @@ def stack_prompt(block: dict, top: dict | None, loose: list[dict], table: str = 
     if top.get("lying") and t["lying"]:
         y += t["lying"]
     if any(o.get("colour") == top.get("colour") for o in loose):
-        y += " " + t.get("tower_qualifier", "at the top of the tower")
+        if len(tower_ids or ()) >= 2:  # the support sits on a tower: the labels name it "at the top of the tower"
+            y += " " + t.get("tower_qualifier", "at the top of the tower")
+        else:  # a lone support with a same-colour twin: name it by side, as the labels do, or give up
+            side = name_block(top, [top] + [o for o in loose if o is not top], table)
+            if side is None or side == f"{top['colour']} block":
+                return None
+            y = side
     return t["stack"].format(x=x, y=y)
