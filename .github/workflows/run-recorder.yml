@@ -1,0 +1,22 @@
+name: run recorder
+
+on:
+  push:
+    branches: [main]
+    paths: ['run_recorder/**', '.github/workflows/run-recorder.yml']
+  pull_request:
+    paths: ['run_recorder/**', '.github/workflows/run-recorder.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  recorder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install isolated pinned SDKs (no services or hardware)
+        run: uv run --no-project --python 3.12 python run_recorder/setup.py --host 127.0.0.1
+      - name: Test recorder and live-preview isolation
+        run: run_recorder/.venv/bin/python -m unittest discover -s run_recorder -v
