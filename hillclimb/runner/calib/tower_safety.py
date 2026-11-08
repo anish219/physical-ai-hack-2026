@@ -24,8 +24,6 @@ import numpy as np
 from hillclimb.runner.calib.safety import BOX_HI, BOX_LO, FLEX_IN, MARGIN, NEAR, ROLL_MAX, ROLL_UP, STEP, Safety
 
 TABLE_Z = -0.008  # the table top in the arm frame (the 8 mm base plate on it)
-import os as _os
-CAM_GUARDS = _os.environ.get("CAM_GUARDS", "0") == "1"  # the wrist camera's orientation rules (off by default since Nov 8 14:50)
 FRONT_X = 0.05  # low points stay in front of this (the base plate's front edge; the table's near edge is behind it)
 SIDE_Y = (-0.30, 0.42)  # low points stay between these (the table's left edge; the right arm's side)
 LOW = 0.10  # "low": under this over the table
@@ -74,9 +72,7 @@ class TowerSafety(Safety):
         mujoco.mj_kinematics(self.s.model, d)
         Rt = d.site_xmat[self.sid].reshape(3, 3)
         up = -Rc[:, 1]  # the image's up, in the world
-        if not CAM_GUARDS:
-            pass  # camera-orientation guards off (Isaiah, Nov 8 14:50): they stranded the arm; collision checks below stay
-        elif Rt[:, 2] @ np.array([0, 0, -1.0]) >= DOWN_MIN:  # fingers down
+        if Rt[:, 2] @ np.array([0, 0, -1.0]) >= DOWN_MIN:  # fingers down
             out = pc[:2] / max(np.linalg.norm(pc[:2]), 1e-6)
             h = up[:2] / max(np.linalg.norm(up[:2]), 1e-6)
             if h @ out < OUT_MIN:
@@ -120,8 +116,6 @@ class TowerSafety(Safety):
 
 def outward_ok(R: np.ndarray, xy) -> bool:
     """A fingers-down tool frame passes rule 2 at xy: the camera (on the across axis side) faces outward."""
-    if not CAM_GUARDS:
-        return True
     from hillclimb.runner.calib.tower_plan import ROOT
     import json
     Rm = np.array(json.loads((ROOT / "calib" / "cam_wrist_l.json").read_text())["R_in_tcp"])

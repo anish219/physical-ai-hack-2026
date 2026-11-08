@@ -337,17 +337,6 @@ def usb_gate_wait():
     status(f"GATE open after waiting {_wall.time() - t0:.1f} s at the first pick or push")
 
 
-def _rc(x, y):
-    """cos of the arm's direction at (x, y) when it is turned over 30 deg (else straight ahead: 1)."""
-    th = math.atan2(y, x)
-    return math.cos(th) if abs(th) > math.radians(30) else 1.0
-
-
-def _rs(x, y):
-    th = math.atan2(y, x)
-    return math.sin(th) if abs(th) > math.radians(30) else 0.0
-
-
 class Loop:
     relook_iou = 0.75  # a re-look must fit this well
     def __init__(self, session: pathlib.Path):
@@ -1133,7 +1122,7 @@ class Loop:
         if not moved and not (z0 > TABLE_Z + 0.005 and self.top_look(tx, ty, tyaw, top_of(held), "check")):
             try:
                 pl = Plan(self.op, np.array(self.op.st["target"]), 0.08)
-                pl.to([tx - 0.065 * _rc(tx, ty), ty - 0.065 * _rs(tx, ty), min(max(0.13, top_of(held) + 0.06), LOOK_MAX_Z)], math.degrees(tyaw), 0.4, "check")
+                pl.to([tx - 0.065, ty, min(max(0.13, top_of(held) + 0.06), LOOK_MAX_Z)], math.degrees(tyaw), 0.4, "check")
                 pl.check()
                 self.sweep(pl, exempt=set())
                 self.go(pl, 0.8, "check", "level")
@@ -1439,7 +1428,7 @@ class Loop:
         # the check pose (6.5 cm back) in the same stream: no stop between the back-off and the check photo
         held_now = dict(self.belief.get(colour, {}), z0=top)
         chk = Plan(op, back.nodes[-1][0], 0.08)
-        chk.to([tx - 0.065 * _rc(tx, ty), ty - 0.065 * _rs(tx, ty), min(max(0.13, top_of(held_now) + 0.06), LOOK_MAX_Z)], math.degrees(tyaw), V_HIGH, "check")
+        chk.to([tx - 0.065, ty, min(max(0.13, top_of(held_now) + 0.06), LOOK_MAX_Z)], math.degrees(tyaw), V_HIGH, "check")
         try:
             chk.check()
             self.sweep(chk, exempt=set())
@@ -1578,9 +1567,7 @@ class Loop:
                 x, y = GOOD[i][0] + self.rng.uniform(-0.02, 0.02), GOOD[i][1] + self.rng.uniform(-0.02, 0.02)
             else:
                 x, y = self.rng.uniform(*AREA[0]), self.rng.uniform(*AREA[1])
-            # the block's yaw within 45 deg of the arm's own direction there (straight ahead: as before; a tower turned
-            # far round, e.g. 75 deg left, needs the same relative yaw or no wrist pose fits: Nov 8 14:40)
-            yaw = math.atan2(y, x) + self.rng.uniform(-math.pi / 4, math.pi / 4) if abs(math.atan2(y, x)) > math.radians(30) else self.rng.uniform(-math.pi / 4, math.pi / 4)
+            yaw = self.rng.uniform(-math.pi / 4, math.pi / 4)
             ext_m = ext(self.belief[moving]) if moving in self.belief else 0.0
             if any(math.hypot(x - b["x"], y - b["y"]) < gap + ext(b) + ext_m for c, b in self.belief.items() if c != moving) or \
                     any(math.hypot(x - a[0], y - a[1]) < gap for a in avoid):
@@ -1608,8 +1595,7 @@ class Loop:
             tx, ty, tyaw, tl, sup = target
             p3 = self.plan_place(colour, lift.nodes[-1][0], lift.R, (tx, ty, tyaw, TABLE_Z + tl * H, sup), 0.015)
             ck = Plan(self.op, p3.nodes[-1][0], 0.08)
-            th = math.atan2(ty, tx) if abs(math.atan2(ty, tx)) > math.radians(30) else 0.0  # back off toward the base
-            ck.to([tx - 0.065 * math.cos(th), ty - 0.065 * math.sin(th), look_z(tl)], math.degrees(tyaw), 0.4, "check")
+            ck.to([tx - 0.065, ty, look_z(tl)], math.degrees(tyaw), 0.4, "check")
             ck.check(skip=colour)
             return True
         except SystemExit as e:
