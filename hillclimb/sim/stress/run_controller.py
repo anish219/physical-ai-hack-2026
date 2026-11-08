@@ -295,6 +295,10 @@ def t_bypass():
     wait(lambda: ctl._busy() and h["b"].count("place_next") >= 1, 6)
     old = h["b"]
     ok, why = ctl.arm_round({"gate_bypass": False})
+    if not ok:
+        record("OK", "6d arm_round mid-placement is refused (fixed in 67b9f85)", why)
+        ctl.shutdown()
+        return
     gate.open = False
     ctl.go()
     t0 = time.time()

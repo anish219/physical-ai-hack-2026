@@ -105,6 +105,8 @@ class LeftController:
                 if not hasattr(new, k):
                     return False, f"unknown setting {k}"
                 setattr(new, k, type(getattr(new, k))(v))
+            if new.mode != "practice" and "gate_bypass" not in (cfg or {}):
+                new.gate_bypass = False  # a bypass left over from a practice round never carries into a match
             if new.gate_bypass and new.mode != "practice":
                 return False, "gate_bypass is practice only"
             if new.crunch_goal > new.max_goal:
