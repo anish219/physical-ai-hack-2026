@@ -68,6 +68,7 @@ packages = ["src/dream_hackathon"]
 [tool.ruff]
 line-length = 119
 target-version = "py312"
+extend-exclude = ["vendor/leonard_sequences"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]
