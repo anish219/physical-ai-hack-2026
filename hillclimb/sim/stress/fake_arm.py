@@ -4,7 +4,7 @@ GET /state, /overhead.jpg, /wrist.jpg; POST /move, /target, /stop. Every request
 mode keys:
   state:    ok | q_null | disabled | http500 | notjson | slow
   move:     ok | http400 | slow
-  overhead: ok | frozen | frozen_nostamp | missing | garbage | slow
+  overhead: ok | frozen | frozen_nostamp | missing | garbage | slow | flaky (every other request 404)
   grip:     float, the jaw value /state reports (for the gate's JawWatch on the right arm)
   slow_s:   how long "slow" sleeps
 """
@@ -74,14 +74,14 @@ class FakeArm:
                     ov = m["overhead"] if p == "/overhead.jpg" else "ok"
                     if ov == "slow":
                         time.sleep(m["slow_s"])
-                    if ov == "missing":
+                    if ov == "missing" or (ov == "flaky" and arm.calls["GET " + p] % 2 == 0):
                         return self._send(404, b'{"error":"no camera"}')
                     if ov == "garbage":
                         return self._send(200, b"\xff\xd8" + os.urandom(3000), "image/jpeg", {"X-Stamp": f"{time.time():.3f}"})
                     if ov in ("frozen", "frozen_nostamp"):
                         with arm._lock:
                             if arm._frozen is None:
-                                arm._frozen = (jpeg(arm.i), time.time())
+                                arm._frozen = (jpeg(arm.i), time.time() - float(m.get("frozen_age_s", 0.0)))
                         data, stamp = arm._frozen
                         hdr = {"X-Stamp": f"{stamp:.3f}"} if ov == "frozen" else {}
                         return self._send(200, data, "image/jpeg", hdr)

@@ -32,6 +32,7 @@ from hillclimb.common.config import CFG
 from hillclimb.left.controller import LeftController
 
 HERE = pathlib.Path(__file__).resolve().parent
+STARTED = time.time()  # hc.sh compares this to the newest code file to know a running server is stale
 _gate_mod = None
 _gate_err = ""
 
@@ -192,6 +193,9 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
                     if f is None:
                         return self._send(503, {"error": "camera unavailable"})
                     return self._send(200, raw=f[0], ctype="image/jpeg")
+                if p == "/api/version":
+                    import os
+                    return self._send(200, {"started": STARTED, "pid": os.getpid(), "code": str(HERE.parent)})
                 if p == "/api/right":
                     from hillclimb.left import right_status
                     return self._send(200, right_status.status())
