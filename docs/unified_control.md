@@ -1,5 +1,55 @@
 # Unified station controller
 
+## Star arm end-effector input
+
+Each arm card also has a **Star arm** input. There is one Star leader: selecting
+it on one side releases its assignment on the other. The SO-101 can independently
+control the opposite follower. Star selection starts untracked and uses the same
+Track/Untrack, translation scale, recording and rejection controls as SO-101.
+Per-arm power, zero and gripper torque controls continue to apply.
+
+All seven encoders are used: IDs 0–5 drive six-axis forward kinematics, followed
+by relative end-effector mapping and the existing Metal IK; ID 6 maps the
+0–90 degree gripper lever to closed–open. The pose reference is the manufacturer's
+ROS2 `link6` wrist origin, without an added tool offset. This first test uses the
+manufacturer's six-axis Star Arm 102 ROS2 model; physical direction and scale
+still need checking on the assembled leader/follower pair.
+
+NUCK-1's Star port is `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, at
+1,000,000 baud. Override with `--star-port`; its worker listens on port 8085
+(`--star-dashboard-port`). The reader only queries encoders and leaves hardware
+origins, torque and multi-turn counters unchanged. In the operator-positioned
+folded/closed pose on November 7, the measured raw degrees were approximately
+`[-2.4, -0.4, -0.3, 0.7, 1.4, 3.1, 0.2]`. Existing origins are used for this
+relative-motion test; no new zero calibration was written. Track captures fresh
+leader/follower anchors; it does not calibrate joint zeros.
+
+Star examples use the station dataset directory's `unified/star/{left,right}`
+subfolders. SO-101 recordings keep their existing location. The Star control API
+is `/api/star/control` and `/api/star/reject`; assignment uses the existing arm
+input endpoint with `{"source":"star"}`.
+
+The Star panel's **Start recording / Stop recording** button is an explicit
+toggle; Track does not start recording. Star examples capture the overhead and
+both wrist streams, along with the selected follower's measured joints/gripper
+and commanded joints/gripper. **Replay latest** saves an active recording,
+untracks the leader, and loads the newest saved take for the assigned arm.
+It first approaches the take's first commanded pose at **Max speed to start**
+(default 0.5 rad/s per joint), with gripper opening approaching at up to 1.5/s.
+Once at the first target, it follows the recorded timestamps and gripper values.
+The approach cap does not slow the recorded playback. The same button becomes
+**Stop replay**; Track, Untrack, Return to 0, Kill, and input changes also leave
+replay through their existing command handoff. Replay does not start on page load
+or on assignment. The cap is retained per arm across leader reassignment.
+
+The same control endpoint accepts `{"replay_requested":true|false}` and
+`{"replay_start_speed":0.5}`. Replay state includes `replay_phase` (pending,
+approaching, playing, complete, idle, or error), the selected episode, elapsed
+time, duration, and any load error. The UI shows these phases while playback runs.
+
+Model and raw angle convention:
+[Fashion Star ROS2 source](https://github.com/servodevelop/Star-Arm-102/tree/main/ros2-humble/src).
+
 The unified page is served on NUCK-1 at port **8081**. The existing SSH tunnel
 continues to work: [open the page](http://localhost:8081/).
 
@@ -80,6 +130,16 @@ Dream's SDK computes tool poses, including the dummy pose, from those joints.
 Single-arm playback sends only that side's returned chunk; Both plays matching
 left/right rows at 20 Hz through the same direct-target path used by the leader.
 Observation streaming continues at 10 Hz during inference and playback.
+
+Each API panel has an **Available models** selector populated from the station
+account's Dream API. Models are grouped into **Your trained models** and **Public
+models**, using the exact checkpoint IDs returned by `DreamClient.get_models()`.
+**Refresh models** fetches the current list; loading or refreshing never changes
+the selected checkpoint. **Checkpoint ID** remains editable for manual IDs.
+Selecting a model updates the same shared checkpoint draft used by Call and Run.
+The list is loaded through `GET /api/models` using the existing server-side key;
+listing does not open a policy or invoke inference. Each Left/Right/Both panel
+keeps its own checkpoint selection.
 
 API task and checkpoint text are shared live with everyone connected. Edits are
 sent on input, distributed through `/api/events`, and retained in server memory

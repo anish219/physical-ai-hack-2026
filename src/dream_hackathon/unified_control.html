@@ -42,6 +42,7 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <div class="actions"><button class="power" id="left-power">Turn on</button><button id="left-home">Return to 0</button><button id="left-zero">Set 0</button></div>
 <p class="zero-note" id="left-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="left-input-dream" aria-pressed="false">Dream API</button><button id="left-input-so101" aria-pressed="false">SO-101</button>
+<button id="left-input-star" aria-pressed="false">Star arm</button>
 <button id="left-input-sequence" aria-pressed="false">Sequences</button>
 <button id="left-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
 <label for="left-grip-torque">Gripper holding torque <output id="left-grip-value">—</output></label>
@@ -55,6 +56,7 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <div class="actions"><button class="power" id="right-power">Turn on</button><button id="right-home">Return to 0</button><button id="right-zero">Set 0</button></div>
 <p class="zero-note" id="right-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="right-input-dream" aria-pressed="false">Dream API</button><button id="right-input-so101" aria-pressed="false">SO-101</button>
+<button id="right-input-star" aria-pressed="false">Star arm</button>
 <button id="right-input-sequence" aria-pressed="false">Sequences</button>
 <button id="right-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
 <label for="right-grip-torque">Gripper holding torque <output id="right-grip-value">—</output></label>
@@ -74,6 +76,18 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <input id="scale" type="range" min="0" max="3" step="0.05" value="1">
 <div class="actions spaced"><button id="record">Record example</button><button id="reject">Reject example</button></div>
 <p id="record-status"></p></article>
+<article class="card" id="star-panel" hidden><p class="panel-label">Leader input</p><div class="card-title"><h2>Star arm</h2><span class="badge" id="star-side">Not assigned</span></div>
+<p id="star-hint">Choose Star arm under either arm. Click it again to release the assignment.</p>
+<span class="badge" id="star-tracking-state">UNTRACKED</span>
+<div class="actions spaced"><button id="star-track">Track</button><button id="star-untrack">Untrack</button></div>
+<label for="star-scale">Translation scale <output id="star-value">1.00×</output></label>
+<input id="star-scale" type="range" min="0" max="3" step="0.05" value="1">
+<div class="actions spaced"><button id="star-record" aria-pressed="false">Start recording</button><button id="star-replay">Replay latest</button></div>
+<label for="star-replay-speed">Max speed to start (rad/s)</label>
+<input id="star-replay-speed" type="number" min="0.01" step="0.05" value="0.5">
+<p class="feedback" id="star-replay-status">Replay approaches the start pose, then follows the recorded timing.</p>
+<div class="actions spaced"><button id="star-reject">Reject example</button></div>
+<p id="star-record-status"></p></article>
 <article class="card" id="api-left-panel" hidden></article>
 <article class="card" id="api-right-panel" hidden></article>
 <article class="card" id="api-both-panel" hidden></article>
@@ -85,7 +99,10 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <p class="panel-label">Model input</p><h2 data-field="title"></h2>
 <label data-for="task">Task</label><textarea data-field="task" rows="3" placeholder="Put the cube in the bowl"></textarea>
 <p class="feedback">Text is shared live with everyone connected. Run uses this task.</p>
-<label data-for="checkpoint">Checkpoint</label><input type="text" data-field="checkpoint" value="dreamlabs/dream-1-beta">
+<label data-for="model">Available models</label><select data-field="model"><option value="">Loading models…</option></select>
+<div class="actions spaced"><button data-field="refresh-models">Refresh models</button></div>
+<p class="feedback" data-field="model-status"></p>
+<label data-for="checkpoint">Checkpoint ID</label><input type="text" data-field="checkpoint" value="dreamlabs/dream-1-beta">
 <div class="actions spaced"><button data-field="connect">Connect</button><button data-field="call">Call once · inspect</button></div>
 <div class="actions spaced"><button data-field="run">Run API</button><button data-field="stop">Stop API</button></div>
 <p data-field="status">Not connected</p><p class="error" data-field="error"></p>

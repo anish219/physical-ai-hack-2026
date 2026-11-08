@@ -158,7 +158,7 @@ def test_assignment_switch_changes_only_leader_process_and_preserves_settings(tm
     assert commands[-1][commands[-1].index("--remote-server") + 1] == "http://right"
     leader.select("left")
     assert commands[-1][commands[-1].index("--remote-server") + 1] == "http://left"
-    assert leader.settings["right"] == {"scale": 1.6, "grip_torque_nm": 1}
+    assert leader.settings["right"] == {"scale": 1.6, "grip_torque_nm": 1, "replay_start_speed": 0.5}
     leader.select(None)
     assert len(commands) == 2 and len(signals) == 2 and leader.side is None
     assert not any("armserver" in str(command) for command in commands)

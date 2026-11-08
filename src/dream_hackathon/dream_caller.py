@@ -108,6 +108,17 @@ def open_client(checkpoint: str, hz: float) -> Any:
     return client
 
 
+def available_models() -> list[dict]:
+    """List account checkpoints without opening a policy or invoking inference."""
+    import dream
+
+    with dream.DreamClient() as client:
+        return [
+            {"id": model.id, "owner": model.owner, "servable": model.servable}
+            for model in client.get_models()
+        ]
+
+
 class ArmCaller:
     """Independent observation, inference and command workers for exactly one arm."""
 
@@ -417,6 +428,7 @@ def handler_for(callers: dict[str, ArmCaller]) -> type[BaseHTTPRequestHandler]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--list-models", action="store_true", help="Print account checkpoints and exit")
     parser.add_argument("--left-url", default="http://127.0.0.1:8691")
     parser.add_argument("--right-url", default="http://127.0.0.1:8692")
     parser.add_argument("--port", type=int, default=8082)
@@ -426,6 +438,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--height", type=int, default=180)
     parser.add_argument("--main-controller", action="store_true", help="Include Both and use direct SDK targets")
     args = parser.parse_args(argv)
+    if args.list_models:
+        print(json.dumps({"models": available_models()}))
+        return
     if min(args.action_hz, args.observation_hz, args.width, args.height) <= 0:
         parser.error("rates and image dimensions must be positive")
     callers = {

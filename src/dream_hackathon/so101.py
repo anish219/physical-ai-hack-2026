@@ -114,12 +114,15 @@ def main() -> None:
     parser.add_argument("--config", default="configs/station.yaml")
     parser.add_argument("--side", default="right", choices=("left", "right"), help="Follower arm (default: right)")
     parser.add_argument("--leader-port", required=True)
+    parser.add_argument("--leader-kind", choices=("so101", "star"), default="so101")
     parser.add_argument("--leader-id", default="hackathon_so101")
     parser.add_argument("--calibrate", action="store_true", help="Calibrate the leader only; do not open followers")
     parser.add_argument("--read-leader", action="store_true", help="Print leader positions; do not open followers")
     parser.add_argument("--dry-run", action="store_true", help="Read the selected follower and print targets")
     parser.add_argument("--hz", type=float, default=30)
     parser.add_argument("--translation-scale", type=float, default=1.0, help="Follower metres per leader metre")
+    parser.add_argument("--replay-start-speed", type=float, default=0.5, help="Maximum approach joint speed, rad/s")
+    parser.add_argument("--other-arm-server", help="Opposite arm server for the third recording camera")
     parser.add_argument(
         "--leader-to-base-rpy-deg",
         type=float,
@@ -159,9 +162,16 @@ def main() -> None:
     if not 0.1 <= args.gripper_hold_torque_nm <= 2.0:
         parser.error("--gripper-hold-torque-nm must be between 0.1 and 2.0")
 
-    from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
+    if args.leader_kind == "star":
+        from dream_hackathon.star_leader import StarLeader
 
-    leader = SO101Leader(SO101LeaderConfig(port=args.leader_port, id=args.leader_id, use_degrees=True))
+        leader = StarLeader(args.leader_port)
+        if args.calibrate:
+            parser.error("Star uses its existing encoder origins; calibration is a separate physical zero operation")
+    else:
+        from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
+
+        leader = SO101Leader(SO101LeaderConfig(port=args.leader_port, id=args.leader_id, use_degrees=True))
     robot = None
     lock = None
     dashboard = None
@@ -187,15 +197,22 @@ def main() -> None:
         from dream_hackathon.so101_gripper import feedback as gripper_feedback
         from dream_hackathon.so101_power import kill_controlled_arm
         from dream_hackathon.so101_recording import ExampleRecorder
+        from dream_hackathon.star_replay import Replay, latest_take
 
         station = config.load(args.config)
         if station.arm != "metal":
             parser.error("this command expects a Metal station config")
         whole_station = station
         station = dataclasses.replace(station, arms={args.side: station.arms[args.side]})
-        leader_fk = LeaderFK(args.leader_urdf, args.leader_tool_link)
+        if args.leader_kind == "star":
+            from dream_hackathon.star_leader import StarFK
+
+            leader_fk = StarFK()
+        else:
+            leader_fk = LeaderFK(args.leader_urdf, args.leader_tool_link)
         solver = teleop_ik(station)[args.side]
         controls = Controls(args.translation_scale, args.side, args.dry_run, args.gripper_hold_torque_nm)
+        controls.change({"replay_start_speed": args.replay_start_speed})
         tracker = ToolTracker(base_rotation(args.leader_to_base_rpy_deg))
         root = (args.dataset_dir or whole_station.dataset_dir / "so101" / f"{args.side}-context").expanduser()
         other_side = "left" if args.side == "right" else "right"
@@ -206,7 +223,12 @@ def main() -> None:
             args.task or whole_station.task or "do the demonstrated task",
             args.record_cameras,
             context_pose=None if args.remote_server else lambda: read_context_pose(other_side),
-            camera_factory=remote_cameras(args.remote_server) if args.remote_server else None,
+            camera_factory=(
+                remote_cameras(args.remote_server, side=args.side, other_base=args.other_arm_server)
+                if args.remote_server
+                else None
+            ),
+            include_inactive_wrist=args.leader_kind == "star" and bool(args.other_arm_server),
         )
         controls.report(dataset_dir=str(root), saved_episodes=recorder.saved_count())
 
@@ -236,7 +258,8 @@ def main() -> None:
             dashboard = LeaderDashboard(controls, args.dashboard_port, on_kill=kill_arm, on_control=change_control)
             print(f"dashboard: http://127.0.0.1:{dashboard.port} (starts untracked)", flush=True)
         print(
-            f"SO-101 tool pose -> {args.side} Metal tool pose; {'dry run' if args.dry_run else 'live'}. Ctrl+C exits.",
+            f"{args.leader_kind} tool pose -> {args.side} Metal tool pose; "
+            f"{'dry run' if args.dry_run else 'live'}. Ctrl+C exits.",
             flush=True,
         )
         printed = 0.0
@@ -244,12 +267,17 @@ def main() -> None:
         return_goal = None
         grip_revision = -1
         grip_feedback_at = 0.0
+        replay = None
         while True:
             tick = time.monotonic()
             action = leader.get_action()
             sample = None
             with hardware_lock:
                 state = controls.snapshot()
+                if not state["replay_requested"]:
+                    replay = None
+                    if state["replay_phase"] in ("pending", "approaching", "playing"):
+                        controls.report(replay_phase="idle")
                 if args.remote_server and robot is None and not state["tracking"]:
                     remote_state = call(args.remote_server, "/state")
                     if remote_state["arm_open"]:
@@ -259,7 +287,7 @@ def main() -> None:
                         grip = float(robot.connected_state["goal_grip"])
                         controls.report(arm_open=True, power_off=False, message="Arm on; untracked")
                         grip_revision = -1
-                if state["tracking"] and robot is None:
+                if (state["tracking"] or state["replay_requested"]) and robot is None:
                     robot, lock = start_arm(
                         controls,
                         lambda: (
@@ -294,6 +322,7 @@ def main() -> None:
                         joints, grips = robot.read()
                         command, grip = joints[args.side].copy(), grips[args.side]
                     target_pose = None
+                    replay_command = False
                     if state["home_requested"]:
                         if return_goal is None:
                             return_goal = robot.start_joints[args.side].copy()
@@ -304,6 +333,33 @@ def main() -> None:
                             controls.report(
                                 home_requested=False, homing=False, message="Returned to the captured startup pose"
                             )
+                    elif state["replay_requested"] and recorder.episode is None:
+                        tracker.mapping = None
+                        return_goal = None
+                        try:
+                            if replay is None:
+                                measured, measured_grips = robot.read()
+                                take = latest_take(root, args.side, station.arm)
+                                replay = Replay(
+                                    take,
+                                    measured[args.side],
+                                    measured_grips[args.side],
+                                    state["replay_start_speed"],
+                                    tick,
+                                )
+                                controls.report(
+                                    replay_episode=take.episode, replay_duration=float(take.timestamps[-1])
+                                )
+                            command, grip, finished = replay.step(tick)
+                            replay_command = True
+                            controls.report(replay_phase=replay.phase, replay_elapsed=replay.elapsed)
+                            if finished:
+                                controls.report(
+                                    replay_requested=False, message=f"Replayed example {replay.take.episode}"
+                                )
+                        except Exception as error:
+                            controls.report(replay_requested=False, replay_phase="error", replay_error=str(error))
+                            replay = None
                     else:
                         return_goal = None
                         target_pose = tracker.update(leader_fk.pose(action), solver.fk(command), state)
@@ -317,7 +373,9 @@ def main() -> None:
                             flush=True,
                         )
                         printed = tick
-                    if not args.dry_run and (not args.remote_server or state["tracking"] or state["home_requested"]):
+                    if not args.dry_run and (
+                        not args.remote_server or state["tracking"] or state["home_requested"] or replay_command
+                    ):
                         robot.command({args.side: command}, {args.side: grip})
                     elif args.remote_server and not args.dry_run:
                         held = call(args.remote_server, "/state")

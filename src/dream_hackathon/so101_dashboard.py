@@ -27,6 +27,13 @@ class Controls:
             home_requested=False,
             homing=False,
             recording_error="",
+            replay_requested=False,
+            replay_phase="idle",
+            replay_error="",
+            replay_episode=None,
+            replay_elapsed=0.0,
+            replay_duration=0.0,
+            replay_start_speed=0.5,
             reject_requested=False,
             reject_kind="",
             grip_torque_nm=grip_torque_nm,
@@ -43,10 +50,34 @@ class Controls:
 
     def change(self, values: dict) -> dict:
         updates = {}
+        if "replay_start_speed" in values:
+            speed = values["replay_start_speed"]
+            if (
+                isinstance(speed, bool)
+                or not isinstance(speed, (int, float))
+                or not math.isfinite(speed)
+                or speed <= 0
+            ):
+                raise ValueError("Replay start speed must be a positive finite number")
+            updates["replay_start_speed"] = float(speed)
+        if "replay_requested" in values:
+            if not isinstance(values["replay_requested"], bool):
+                raise ValueError("replay_requested must be true or false")
+            updates["replay_requested"] = values["replay_requested"]
+            if values["replay_requested"]:
+                updates.update(
+                    tracking=False,
+                    recording_requested=False,
+                    replay_error="",
+                    replay_phase="pending",
+                    home_requested=False,
+                    homing=False,
+                )
         if "tracking" in values:
             if not isinstance(values["tracking"], bool):
                 raise ValueError("tracking must be true or false")
             updates["tracking"] = values["tracking"]
+            updates["replay_requested"] = False
         if "scale" in values:
             scale = values["scale"]
             if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale):
@@ -91,7 +122,11 @@ class Controls:
             if self._state["recording"] or self._state["recording_requested"]:
                 raise ValueError("Save the recording before returning, as with the existing Home control")
             self._state.update(
-                tracking=False, home_requested=True, homing=True, message="Returning to the captured startup pose"
+                tracking=False,
+                replay_requested=False,
+                home_requested=True,
+                homing=True,
+                message="Returning to the captured startup pose",
             )
             self._state["revision"] += 1
             return self._state.copy()
