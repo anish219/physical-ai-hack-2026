@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
-from dream_hackathon.dream_caller import ArmCaller, ArmEndpoint, build_observation, handler_for, jpeg
+from dream_hackathon.dream_caller import ArmCaller, ArmEndpoint, StationCaller, build_observation, handler_for, jpeg
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
@@ -198,3 +198,67 @@ def test_callers_do_not_block_each_other_and_page_has_no_connect_side_effect():
             models["left"].release.set()
             for caller in callers.values():
                 caller.close()
+
+
+@pytest.mark.parametrize("selection", ["left", "right", "both"])
+def test_main_controller_observations_and_direct_playback(selection):
+    logs, model = {"left": [], "right": []}, Model()
+    model.release.set()
+    with listener(fake_arm(logs["left"])) as left, listener(fake_arm(logs["right"])) as right:
+        endpoints = {"left": ArmEndpoint(left), "right": ArmEndpoint(right)}
+        caller = StationCaller(selection, endpoints, client_factory=lambda *_: model, hz=100)
+        try:
+            assert not any(logs.values())
+            caller.connect()
+            wait_for(lambda: caller.sample is not None)
+            caller.start({"task": "inspect"}, run=False)
+            wait_for(lambda: not caller.snapshot()["busy"])
+            frames, observation, _ = model.ticks[-1]
+            assert set(frames) == {"video.scene", "video.wrist_l", "video.wrist_r"}
+            selected = ("left", "right") if selection == "both" else (selection,)
+            for side, slot in (("left", "l"), ("right", "r")):
+                image = cv2.imdecode(np.frombuffer(base64.b64decode(frames[f"video.wrist_{slot}"]), np.uint8), 1)
+                if side in selected:
+                    assert observation[f"state.{side}_arm"] == [0.1] * 6
+                    assert observation[f"state.{side}_grip"] == [0.7]
+                    assert image.mean() == pytest.approx(127, abs=1)
+                else:
+                    assert observation[f"state.{side}_arm"] == [0] * 6
+                    assert observation[f"state.{side}_grip"] == [0]
+                    assert not image.any()
+                    assert logs[side] == []
+            assert not any(path == "/target" for log in logs.values() for path, _ in log)
+            caller.start({"task": "run"}, run=True)
+            wait_for(lambda: all(any(path == "/target" for path, _ in logs[s]) for s in selected))
+            caller.stop()
+            wait_for(lambda: not caller.snapshot()["busy"])
+            for side in selected:
+                targets = [body for path, body in logs[side] if path == "/target"]
+                assert all(body["q"] == [1.0 if side == "left" else 2.0] * 6 for body in targets)
+                paths = [path for path, _ in logs[side]]
+                assert "/target" not in paths[paths.index("/stop") + 1 :]
+            if selection == "both":
+                assert len(caller.snapshot()["rows"][0]) == 14
+        finally:
+            caller.close()
+
+
+def test_both_stop_discards_pending_api_reply():
+    logs, model = {"left": [], "right": []}, Model()
+    with listener(fake_arm(logs["left"])) as left, listener(fake_arm(logs["right"])) as right:
+        caller = StationCaller(
+            "both", {"left": ArmEndpoint(left), "right": ArmEndpoint(right)}, client_factory=lambda *_: model
+        )
+        try:
+            caller.connect()
+            wait_for(lambda: caller.sample is not None)
+            caller.start({"task": "run"}, run=True)
+            assert model.entered.wait(2)
+            caller.stop()
+            model.release.set()
+            wait_for(lambda: not caller.snapshot()["busy"])
+            for log in logs.values():
+                assert [p for p, _ in log if p in ("/target", "/stop")] == ["/stop"]
+        finally:
+            model.release.set()
+            caller.close()

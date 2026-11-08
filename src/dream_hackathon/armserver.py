@@ -28,6 +28,7 @@ class ArmControl:
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
+        self.direct_target = False
         self.state = {
             "q": None,
             "grip": None,
@@ -53,6 +54,7 @@ class ArmControl:
         with self.lock:
             st = self.state
             if path == "/move":
+                self.direct_target = False
                 if body.get("q") is not None:
                     st["goal"] = [float(v) for v in body["q"]]
                 if body.get("grip") is not None:
@@ -65,6 +67,14 @@ class ArmControl:
                 st["goal"] = list(st["q"])
             elif path == "/quit":
                 st["quit"] = True
+
+    def target(self, joints, grip) -> None:
+        """Transport an already-computed leader target without adding motion policy."""
+        with self.lock:
+            self.direct_target = True
+            self.state.update(
+                goal=[float(q) for q in joints], goal_grip=float(grip), stall_watch=False, stalled=False, error=None
+            )
 
     def camera_status(self, name: str, opened: bool) -> None:
         with self.lock:
@@ -93,13 +103,17 @@ class ArmControl:
                 st = self.state
                 goal, goal_grip, rate = np.array(st["goal"]), st["goal_grip"], min(st["rate"], MAX_RATE)
                 quitting = st["quit"]
+                direct = self.direct_target and not quitting
             if quitting:
                 goal, rate = start, 0.3
-            d = goal - cmd
-            step = rate * TICK
-            n = np.max(np.abs(d))
-            cmd = goal.copy() if n <= step else cmd + d * (step / n)
-            grip_cmd += float(np.clip(goal_grip - grip_cmd, -1.5 * TICK, 1.5 * TICK))
+            if direct:
+                cmd, grip_cmd = goal.copy(), goal_grip
+            else:
+                d = goal - cmd
+                step = rate * TICK
+                n = np.max(np.abs(d))
+                cmd = goal.copy() if n <= step else cmd + d * (step / n)
+                grip_cmd += float(np.clip(goal_grip - grip_cmd, -1.5 * TICK, 1.5 * TICK))
             # No HTTP or camera mutex is held across vendor I/O or sleep.
             arm.write(command(positions_rad=cmd, gripper=grip_cmd))
             sleep(TICK)
@@ -116,12 +130,12 @@ class ArmControl:
                 )
                 if st["quit"] and not st["moving"]:
                     return
-                if lag > ABORT_RAD:
+                if not direct and lag > ABORT_RAD:
                     st["goal"] = meas.tolist()
                     st["error"] = f"joint lag {lag:.2f} rad: stopped where the arm is"
                     cmd = meas.copy()
                     continue
-                if st["stall_watch"] and st["moving"]:
+                if not direct and st["stall_watch"] and st["moving"]:
                     lags.append(float(np.max(np.abs(cmd[1:4] - meas[1:4]))))
                     if len(lags) > 10 and lags[-1] > max(lags[:10]) + STALL_RAD:
                         st["goal"] = meas.tolist()
@@ -349,6 +363,15 @@ def load_bindings(path: pathlib.Path, sides: tuple[str, ...]) -> list[ArmBinding
 
 
 def main(argv: list[str] | None = None) -> None:
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--unified" in argv:
+        from dream_hackathon.unified_control import main as unified_main
+
+        argv.remove("--unified")
+        unified_main(argv)
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--side", choices=("left", "right", "both"), default="left")
     parser.add_argument("--port", type=int, help="single-arm port, or left port in Both mode (left 8691, right 8692)")

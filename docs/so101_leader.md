@@ -91,3 +91,10 @@ Per-side locks let this controller coexist with a compatible controller for the
 opposite arm; legacy whole-station controllers remain exclusive. The collection
 dashboard is separate. See [CONTROL_PAGE.md](../CONTROL_PAGE.md) for teammates'
 connection, branch, recording, power-off and station-process instructions.
+# Unified page
+
+The NUC now serves the [unified controller](unified_control.md) on port 8081, with
+independent arm power and None / Left / Right SO-101 assignment. It retains the
+leader controls documented here. Standalone commands below remain available as
+an alternative; the unified service runs its leader worker through the remote
+arm-server adapter so it does not compete for follower CAN ownership.

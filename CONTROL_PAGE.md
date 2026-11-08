@@ -1,5 +1,13 @@
 # NUCK-1 arm control page
 
+**Current service: the unified controller on port 8081.** It has independent left/right
+power controls and an SO-101 assignment selector (None / Left / Right), while retaining
+the leader controls described below. See [unified controller operation](docs/unified_control.md)
+for the current launch command, architecture and recording behavior. The old standalone
+`so101-control` process has been replaced by tmux session `unified-arm-control`;
+the service log is `/tmp/unified-arm-control.log`. Standalone launch/restart examples
+below describe the previous controller, not the currently running service.
+
 The SO-101 leader dashboard runs on **NUCK-1, 10.103.0.132**, port **8081**.
 The default follower is the **right Metal arm**. The page controls real motors.
 

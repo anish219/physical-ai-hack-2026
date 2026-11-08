@@ -171,19 +171,32 @@ class ArmCaller:
             raise ValueError("Arm server returned an invalid JPEG")
         return jpeg(cv2.resize(image, (self.width, self.height)))
 
+    def read_sample(self):
+        return (
+            self.endpoint.state(),
+            self.resize(self.endpoint.frame("overhead")),
+            self.resize(self.endpoint.frame("wrist")),
+        )
+
+    def observation(self, sample):
+        return build_observation(self.side, *sample, self.blank, self.state["task"])
+
+    def action_rows(self, action):
+        return selected_rows(action, self.side)
+
+    def send_row(self, row, rate):
+        self.endpoint.move(row, rate)
+
     def observe(self) -> None:
         while not self.shutdown.is_set():
             started = time.monotonic()
             try:
-                state = self.endpoint.state()
-                scene = self.resize(self.endpoint.frame("overhead"))
-                wrist = self.resize(self.endpoint.frame("wrist"))
+                sample = self.read_sample()
+                state, scene, wrist = sample
                 with self.lock:
-                    self.sample = (state, scene, wrist)
+                    self.sample = sample
                     self.images = {"scene": scene, "wrist": wrist}
-                    frames, observation = build_observation(
-                        self.side, state, scene, wrist, self.blank, self.state["task"]
-                    )
+                    frames, observation = self.observation(sample)
                     if self.client is not None:
                         self.client.set_observation(frames, observation, timestamp=time.monotonic())
                     self.state.update(
@@ -232,12 +245,11 @@ class ArmCaller:
                 self.client = client
                 if self.sample is None:
                     raise ValueError(self.state["observation_error"] or "No observation available")
-                state, scene, wrist = self.sample
-                frames, observation = build_observation(self.side, state, scene, wrist, self.blank, self.state["task"])
+                frames, observation = self.observation(self.sample)
                 client.set_observation(frames, observation, timestamp=time.monotonic())
             while not cancel.is_set():
                 action = client.get_action()
-                rows = selected_rows(action, self.side)
+                rows = self.action_rows(action)
                 with self.lock:
                     self.state.update(rows=rows, calls=self.state["calls"] + 1)
                 if not run:
@@ -249,7 +261,7 @@ class ArmCaller:
                     with self.command_lock:
                         if cancel.is_set():
                             break
-                        self.endpoint.move(row, rate)
+                        self.send_row(row, rate)
                         with self.lock:
                             self.state["commands"] += 1
                     if cancel.wait(max(0, 1 / self.hz - (time.monotonic() - started))):
@@ -275,6 +287,13 @@ class ArmCaller:
         with self.lock:
             self.state.update(running=False, mode="stopping" if self.state["busy"] else "idle")
 
+    def cancel_playback(self):
+        self.cancel.set()
+        with self.command_lock:
+            pass
+        with self.lock:
+            self.state.update(running=False, mode="stopping" if self.state["busy"] else "idle")
+
     def close(self) -> None:
         self.cancel.set()
         self.shutdown.set()
@@ -282,6 +301,60 @@ class ArmCaller:
             self.observer.join(timeout=16)
         if self.worker is not None:
             self.worker.join(timeout=20)
+
+
+class StationCaller(ArmCaller):
+    """Main-controller caller: one selected arm or a shared bimanual policy session."""
+
+    def __init__(self, selection, endpoints, **kwargs):
+        self.endpoints = endpoints
+        self.sides = ("left", "right") if selection == "both" else (selection,)
+        super().__init__(selection, endpoints[self.sides[0]], **kwargs)
+        self.state["endpoints"] = {side: endpoints[side].url for side in self.sides}
+
+    def read_sample(self):
+        if self.side != "both":
+            return super().read_sample()
+        states = {side: self.endpoints[side].state() for side in self.sides}
+        scene = self.resize(self.endpoints["left"].frame("overhead"))
+        wrists = {side: self.resize(self.endpoints[side].frame("wrist")) for side in self.sides}
+        return states, scene, wrists
+
+    def observation(self, sample):
+        if self.side != "both":
+            return super().observation(sample)
+        states, scene, wrists = sample
+        frames, observation = build_observation(
+            "left", states["left"], scene, wrists["left"], self.blank, self.state["task"]
+        )
+        right_frames, right_observation = build_observation(
+            "right", states["right"], scene, wrists["right"], self.blank, self.state["task"]
+        )
+        frames["video.wrist_r"] = right_frames["video.wrist_r"]
+        observation.update({key: value for key, value in right_observation.items() if key.startswith("state.right_")})
+        return frames, observation
+
+    def action_rows(self, action):
+        if self.side != "both":
+            return super().action_rows(action)
+        left, right = selected_rows(action, "left"), selected_rows(action, "right")
+        if len(left) != len(right):
+            raise ValueError("Dream returned different left/right chunk lengths")
+        return [lrow + rrow for lrow, rrow in zip(left, right, strict=True)]
+
+    def send_row(self, row, rate):
+        # SDK-solved targets use the same direct path as the leader controller.
+        for index, side in enumerate(self.sides):
+            values = row[index * 7 : (index + 1) * 7]
+            self.endpoints[side].request("/target", {"q": values[:6], "grip": values[6]})
+
+    def stop(self):
+        self.cancel.set()
+        with self.command_lock:
+            for side in self.sides:
+                self.endpoints[side].stop()
+        with self.lock:
+            self.state.update(running=False, mode="stopping" if self.state["busy"] else "idle")
 
 
 def handler_for(callers: dict[str, ArmCaller]) -> type[BaseHTTPRequestHandler]:
@@ -306,6 +379,8 @@ def handler_for(callers: dict[str, ArmCaller]) -> type[BaseHTTPRequestHandler]:
             if path == "/api/state":
                 return self.reply(200, json.dumps({s: c.snapshot() for s, c in callers.items()}).encode())
             parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "api" and parts[1] in callers and parts[2] == "state":
+                return self.reply(200, json.dumps(callers[parts[1]].snapshot()).encode())
             if len(parts) == 3 and parts[0] == "camera" and parts[1] in callers:
                 caller, name = callers[parts[1]], parts[2].removesuffix(".jpg")
                 with caller.lock:
@@ -327,6 +402,8 @@ def handler_for(callers: dict[str, ArmCaller]) -> type[BaseHTTPRequestHandler]:
                     caller.start(values, run=action == "run")
                 elif action == "stop":
                     caller.stop()
+                elif action == "cancel":
+                    caller.cancel_playback()
                 else:
                     return self.reply(404, b"{}")
                 self.reply(200, json.dumps(caller.snapshot()).encode())
@@ -347,6 +424,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--observation-hz", type=float, default=10)
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)
+    parser.add_argument("--main-controller", action="store_true", help="Include Both and use direct SDK targets")
     args = parser.parse_args(argv)
     if min(args.action_hz, args.observation_hz, args.width, args.height) <= 0:
         parser.error("rates and image dimensions must be positive")
@@ -361,6 +439,19 @@ def main(argv: list[str] | None = None) -> None:
         )
         for side, url in (("left", args.left_url), ("right", args.right_url))
     }
+    if args.main_controller:
+        endpoints = {side: caller.endpoint for side, caller in callers.items()}
+        callers = {
+            selection: StationCaller(
+                selection,
+                endpoints,
+                width=args.width,
+                height=args.height,
+                hz=args.action_hz,
+                observation_hz=args.observation_hz,
+            )
+            for selection in ("left", "right", "both")
+        }
     with ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(callers)) as server:
         server.daemon_threads = True
         print(f"Dream-1 caller: http://127.0.0.1:{server.server_port}", flush=True)

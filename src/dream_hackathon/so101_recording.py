@@ -6,8 +6,17 @@ import numpy as np
 
 
 class ExampleRecorder:
-    def __init__(self, station, side: str, root: pathlib.Path, task: str,
-                 camera_roles=("overhead", "wrist_l", "wrist_r"), *, context_pose=None, camera_factory=None) -> None:
+    def __init__(
+        self,
+        station,
+        side: str,
+        root: pathlib.Path,
+        task: str,
+        camera_roles=("overhead", "wrist_l", "wrist_r"),
+        *,
+        context_pose=None,
+        camera_factory=None,
+    ) -> None:
         self.station, self.side, self.root, self.task = station, side, root, task
         self.camera_roles = tuple(camera_roles)
         self.inactive_wrist = "wrist_l" if side == "right" else "wrist_r"
@@ -56,18 +65,25 @@ class ExampleRecorder:
             self.context_pose()  # Report a missing context before opening cameras.
         if not self.cameras:
             self.cameras = (self.camera_factory or cameras.open_cameras)(
-                tuple(c for c in self.station.cameras
-                      if c.role in self.camera_roles and c.role != self.inactive_wrist),
-                self.station.record_width, self.station.record_height
+                tuple(
+                    c for c in self.station.cameras if c.role in self.camera_roles and c.role != self.inactive_wrist
+                ),
+                self.station.record_width,
+                self.station.record_height,
             )
         if self.writer is None:
             sides = ("left", "right") if self.context_pose is not None else (self.side,)
-            names = [name for side in sides for name in
-                     ([f"{side}_joint_{i}" for i in range(6)] + [f"{side}_gripper"])]
+            names = [
+                name for side in sides for name in ([f"{side}_joint_{i}" for i in range(6)] + [f"{side}_gripper"])
+            ]
             self.writer = dataset.DatasetWriter(
-                self.root, self.station.fps, self.station.arm, names,
+                self.root,
+                self.station.fps,
+                self.station.arm,
+                names,
                 [key for role, key in layouts.video_keys(self.station.family).items() if role in self.camera_roles],
-                self.station.record_width, self.station.record_height,
+                self.station.record_width,
+                self.station.record_height,
             )
         self.episode = self.writer.start_episode(self.task)
 

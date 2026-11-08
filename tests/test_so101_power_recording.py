@@ -143,8 +143,9 @@ class RecordingTests(unittest.TestCase):
 
     def test_explicit_overhead_only_dataset_has_one_video_feature(self):
         try:
-            from dream_hackathon import dataset
             import json
+
+            from dream_hackathon import dataset
         except ImportError:
             self.skipTest("needs video and dataset dependencies")
         station = types.SimpleNamespace(arm="metal", family="makermods", record_width=160, record_height=90)
@@ -169,9 +170,10 @@ class RecordingTests(unittest.TestCase):
 
     def test_real_dataset_contains_measured_action_vectors_and_videos(self):
         try:
-            from dream_hackathon import dataset, layouts
-            import pyarrow.parquet as pq
             import av
+            import pyarrow.parquet as pq
+
+            from dream_hackathon import dataset, layouts
         except ImportError:
             self.skipTest("needs video and dataset dependencies")
         station = types.SimpleNamespace(arm="metal", family="makermods", record_width=160, record_height=90)

@@ -8,13 +8,14 @@ import cv2
 import numpy as np
 
 
-def call(base, path, body=None):
+def call(base, path, body=None, *, timeout=30):
     request = urllib.request.Request(
-        base + path, data=None if body is None else json.dumps(body).encode(),
+        base + path,
+        data=None if body is None else json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
         payload = error.read().decode()
@@ -26,10 +27,14 @@ class RemoteArms:
 
     energized = True
 
-    def __init__(self, base, side):
+    def __init__(self, base, side, *, energize=True, open_arm=True):
         self.base, self.side = base, side
-        state = call(base, "/power", {"enabled": True})
+        self.energized = energize
+        state = call(base, "/power", {"enabled": True}) if energize and open_arm else call(base, "/state")
+        if not state["arm_open"]:
+            raise RuntimeError(state.get("message") or "Arm is off")
         self.start_joints = {side: np.asarray(state["start_joints"], dtype=float)}
+        self.connected_state = state
 
     def read(self):
         state = call(self.base, "/state")
@@ -38,16 +43,23 @@ class RemoteArms:
         return {self.side: np.asarray(state["q"], dtype=float)}, {self.side: float(state["grip"])}
 
     def command(self, joints, grips):
-        call(self.base, "/move", {"q": joints[self.side].tolist(), "grip": grips[self.side], "rate": 0.6})
+        if not self.energized:
+            raise RuntimeError("A dry run never commands an arm")
+        call(self.base, "/target", {"q": joints[self.side].tolist(), "grip": grips[self.side]})
 
     def set_hold_torque(self, torque):
         call(self.base, "/grip-torque", {"torque_nm": torque})
 
     def gripper_feedback(self):
         state = call(self.base, "/state")
-        return {k: state[k] for k in (
-            "grip_measured_torque_nm", "grip_applied_torque_nm", "grip_holding",
-        )}
+        return {
+            k: state[k]
+            for k in (
+                "grip_measured_torque_nm",
+                "grip_applied_torque_nm",
+                "grip_holding",
+            )
+        }
 
     @staticmethod
     def disable(base):
@@ -83,8 +95,13 @@ def remote_cameras(base):
             pass
 
     def open_cameras(configs, width, height):
-        return {cfg.role: RemoteCamera(
-            "/overhead.jpg" if cfg.role == "overhead" else "/wrist.jpg", width, height,
-        ) for cfg in configs}
+        return {
+            cfg.role: RemoteCamera(
+                "/overhead.jpg" if cfg.role == "overhead" else "/wrist.jpg",
+                width,
+                height,
+            )
+            for cfg in configs
+        }
 
     return open_cameras

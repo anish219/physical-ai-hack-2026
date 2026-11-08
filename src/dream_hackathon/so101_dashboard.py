@@ -9,13 +9,33 @@ import threading
 class Controls:
     def __init__(self, scale: float, side: str, dry_run: bool = False, grip_torque_nm: float = 0.5) -> None:
         self._lock = threading.Lock()
-        self._state = dict(tracking=False, scale=scale, side=side, dry_run=dry_run, revision=0,
-                           arm_open=False, recording=False, recording_requested=False, frames=0,
-                           saved_episodes=0, dataset_dir="", power_off=False, killing=False, message="",
-                           home_requested=False, homing=False, recording_error="", reject_requested=False,
-                           reject_kind="",
-                           grip_torque_nm=grip_torque_nm, grip_revision=0, grip_applied_torque_nm=None,
-                           grip_measured_torque_nm=None, grip_holding=False, grip_error="")
+        self._state = dict(
+            tracking=False,
+            scale=scale,
+            side=side,
+            dry_run=dry_run,
+            revision=0,
+            arm_open=False,
+            recording=False,
+            recording_requested=False,
+            frames=0,
+            saved_episodes=0,
+            dataset_dir="",
+            power_off=False,
+            killing=False,
+            message="",
+            home_requested=False,
+            homing=False,
+            recording_error="",
+            reject_requested=False,
+            reject_kind="",
+            grip_torque_nm=grip_torque_nm,
+            grip_revision=0,
+            grip_applied_torque_nm=None,
+            grip_measured_torque_nm=None,
+            grip_holding=False,
+            grip_error="",
+        )
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -59,8 +79,9 @@ class Controls:
             if not (self._state["recording"] or self._state["recording_requested"] or self._state["saved_episodes"]):
                 raise ValueError("No example to reject")
             current = self._state["recording"] or self._state["recording_requested"]
-            self._state.update(recording_requested=False, reject_requested=True,
-                               reject_kind="current" if current else "saved")
+            self._state.update(
+                recording_requested=False, reject_requested=True, reject_kind="current" if current else "saved"
+            )
             return self._state.copy()
 
     def request_home(self) -> dict:
@@ -69,8 +90,9 @@ class Controls:
                 raise ValueError("Track to open the arm before returning")
             if self._state["recording"] or self._state["recording_requested"]:
                 raise ValueError("Save the recording before returning, as with the existing Home control")
-            self._state.update(tracking=False, home_requested=True, homing=True,
-                               message="Returning to the captured startup pose")
+            self._state.update(
+                tracking=False, home_requested=True, homing=True, message="Returning to the captured startup pose"
+            )
             self._state["revision"] += 1
             return self._state.copy()
 
@@ -80,7 +102,7 @@ class Controls:
 
 
 class LeaderDashboard:
-    def __init__(self, controls: Controls, port: int = 8081, on_kill=None) -> None:
+    def __init__(self, controls: Controls, port: int = 8081, on_kill=None, on_control=None) -> None:
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_args):
                 pass
@@ -111,11 +133,15 @@ class LeaderDashboard:
                         if on_kill is None:
                             raise RuntimeError("motor power control is not connected")
                         problems = on_kill()
-                        controls.report(power_off=not problems, arm_open=False, killing=False,
-                                        grip_holding=False, grip_measured_torque_nm=None,
-                                        grip_applied_torque_nm=None,
-                                        message="; ".join(problems) if problems
-                                        else f"{side.title()} arm: motor torque off")
+                        controls.report(
+                            power_off=not problems,
+                            arm_open=False,
+                            killing=False,
+                            grip_holding=False,
+                            grip_measured_torque_nm=None,
+                            grip_applied_torque_nm=None,
+                            message="; ".join(problems) if problems else f"{side.title()} arm: motor torque off",
+                        )
                     except Exception as error:
                         controls.report(killing=False, message=f"Kill arm failed: {error}")
                         self.reply(500, json.dumps(controls.snapshot()).encode(), "application/json")
@@ -145,7 +171,7 @@ class LeaderDashboard:
                     values = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
                     if not isinstance(values, dict):
                         raise ValueError("expected an object")
-                    result = controls.change(values)
+                    result = on_control(values) if on_control is not None else controls.change(values)
                 except (ValueError, TypeError) as error:
                     self.reply(400, json.dumps({"error": str(error)}).encode(), "application/json")
                     return

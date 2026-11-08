@@ -6,8 +6,8 @@ import math
 import pathlib
 import threading
 import time
-from contextlib import ExitStack
 from collections.abc import Mapping
+from contextlib import ExitStack
 
 import numpy as np
 
@@ -86,11 +86,13 @@ def base_rotation(rpy_deg: list[float]) -> np.ndarray:
     cr, sr = math.cos(roll), math.sin(roll)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cy, sy = math.cos(yaw), math.sin(yaw)
-    return np.array([
-        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-        [-sp, cp * sr, cp * cr],
-    ])
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ]
+    )
 
 
 def start_arm(controls, acquire, open_arm):
@@ -118,20 +120,36 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Read the selected follower and print targets")
     parser.add_argument("--hz", type=float, default=30)
     parser.add_argument("--translation-scale", type=float, default=1.0, help="Follower metres per leader metre")
-    parser.add_argument("--leader-to-base-rpy-deg", type=float, nargs=3, default=[0, 0, 0],
-                        metavar=("ROLL", "PITCH", "YAW"), help="Leader base orientation in follower base")
+    parser.add_argument(
+        "--leader-to-base-rpy-deg",
+        type=float,
+        nargs=3,
+        default=[0, 0, 0],
+        metavar=("ROLL", "PITCH", "YAW"),
+        help="Leader base orientation in follower base",
+    )
     parser.add_argument("--leader-urdf", type=pathlib.Path, default=LEADER_URDF)
     parser.add_argument("--leader-tool-link", default="handle_frame_link")
     parser.add_argument("--dashboard-port", type=int, default=8081)
     parser.add_argument("--no-dashboard", action="store_true", help="Track immediately without browser controls")
     parser.add_argument("--remote-server", help="Use an independently owned arm server instead of opening CAN")
-    parser.add_argument("--dataset-dir", type=pathlib.Path,
-                        help="Examples folder (default: station dataset/so101/SIDE-context)")
+    parser.add_argument(
+        "--dataset-dir", type=pathlib.Path, help="Examples folder (default: station dataset/so101/SIDE-context)"
+    )
     parser.add_argument("--task", help="Task text saved with each example")
-    parser.add_argument("--record-cameras", nargs="+", choices=("overhead", "wrist_l", "wrist_r"),
-                        default=["overhead", "wrist_l", "wrist_r"], help="Camera roles explicitly recorded")
-    parser.add_argument("--gripper-hold-torque-nm", type=float, default=0.5,
-                        help="Motor-output holding torque (0.1–2.0 N·m; default: 0.5)")
+    parser.add_argument(
+        "--record-cameras",
+        nargs="+",
+        choices=("overhead", "wrist_l", "wrist_r"),
+        default=["overhead", "wrist_l", "wrist_r"],
+        help="Camera roles explicitly recorded",
+    )
+    parser.add_argument(
+        "--gripper-hold-torque-nm",
+        type=float,
+        default=0.5,
+        help="Motor-output holding torque (0.1–2.0 N·m; default: 0.5)",
+    )
     args = parser.parse_args()
     if args.hz <= 0:
         parser.error("--hz must be positive")
@@ -158,13 +176,14 @@ def main() -> None:
                 time.sleep(1 / args.hz)
 
         from dream_hackathon import config, station_lock, teleop
+        from dream_hackathon.arm_context import read as read_context_pose
         from dream_hackathon.arms.makermods import MakerModsArms, teleop_ik
+        from dream_hackathon.remote_arm import RemoteArms, call, remote_cameras
         from dream_hackathon.so101_dashboard import Controls, LeaderDashboard
-        from dream_hackathon.so101_gripper import apply_hold_torque, feedback as gripper_feedback
+        from dream_hackathon.so101_gripper import apply_hold_torque
+        from dream_hackathon.so101_gripper import feedback as gripper_feedback
         from dream_hackathon.so101_power import kill_controlled_arm
         from dream_hackathon.so101_recording import ExampleRecorder
-        from dream_hackathon.arm_context import read as read_context_pose
-        from dream_hackathon.remote_arm import RemoteArms, remote_cameras
 
         station = config.load(args.config)
         if station.arm != "metal":
@@ -177,10 +196,15 @@ def main() -> None:
         tracker = ToolTracker(base_rotation(args.leader_to_base_rpy_deg))
         root = (args.dataset_dir or whole_station.dataset_dir / "so101" / f"{args.side}-context").expanduser()
         other_side = "left" if args.side == "right" else "right"
-        recorder = ExampleRecorder(whole_station, args.side, root,
-                                   args.task or whole_station.task or "do the demonstrated task", args.record_cameras,
-                                   context_pose=lambda: read_context_pose(other_side),
-                                   camera_factory=remote_cameras(args.remote_server) if args.remote_server else None)
+        recorder = ExampleRecorder(
+            whole_station,
+            args.side,
+            root,
+            args.task or whole_station.task or "do the demonstrated task",
+            args.record_cameras,
+            context_pose=None if args.remote_server else lambda: read_context_pose(other_side),
+            camera_factory=remote_cameras(args.remote_server) if args.remote_server else None,
+        )
         controls.report(dataset_dir=str(root), saved_episodes=recorder.saved_count())
 
         def kill_arm():
@@ -201,10 +225,17 @@ def main() -> None:
         if args.no_dashboard:
             controls.change({"tracking": True})
         else:
-            dashboard = LeaderDashboard(controls, args.dashboard_port, on_kill=kill_arm)
+
+            def change_control(values):
+                with hardware_lock:
+                    return controls.change(values)
+
+            dashboard = LeaderDashboard(controls, args.dashboard_port, on_kill=kill_arm, on_control=change_control)
             print(f"dashboard: http://127.0.0.1:{dashboard.port} (starts untracked)", flush=True)
-        print(f"SO-101 tool pose -> {args.side} Metal tool pose; "
-              f"{'dry run' if args.dry_run else 'live'}. Ctrl+C exits.", flush=True)
+        print(
+            f"SO-101 tool pose -> {args.side} Metal tool pose; {'dry run' if args.dry_run else 'live'}. Ctrl+C exits.",
+            flush=True,
+        )
         printed = 0.0
         next_frame = 0.0
         return_goal = None
@@ -216,13 +247,28 @@ def main() -> None:
             sample = None
             with hardware_lock:
                 state = controls.snapshot()
+                if args.remote_server and robot is None and not state["tracking"]:
+                    remote_state = call(args.remote_server, "/state")
+                    if remote_state["arm_open"]:
+                        robot = RemoteArms(args.remote_server, args.side, energize=not args.dry_run, open_arm=False)
+                        # Attach to an already-powered server without changing its held targets.
+                        command = np.asarray(robot.connected_state["goal"], dtype=float)
+                        grip = float(robot.connected_state["goal_grip"])
+                        controls.report(arm_open=True, power_off=False, message="Arm on; untracked")
+                        grip_revision = -1
                 if state["tracking"] and robot is None:
                     robot, lock = start_arm(
                         controls,
-                        lambda: ExitStack() if args.remote_server else station_lock.acquire_sides(
-                            f"so101 {args.side}", [args.side]),
-                        lambda: RemoteArms(args.remote_server, args.side) if args.remote_server else MakerModsArms(
-                            station, energize=not args.dry_run),
+                        lambda: (
+                            ExitStack()
+                            if args.remote_server
+                            else station_lock.acquire_sides(f"so101 {args.side}", [args.side])
+                        ),
+                        lambda: (
+                            RemoteArms(args.remote_server, args.side, energize=not args.dry_run)
+                            if args.remote_server
+                            else MakerModsArms(station, energize=not args.dry_run)
+                        ),
                     )
                     if robot is not None:
                         joints, grips = robot.read()
@@ -252,8 +298,9 @@ def main() -> None:
                         command, arrived = teleop.home_step(command, return_goal, 1 / args.hz)
                         if arrived:
                             return_goal = None
-                            controls.report(home_requested=False, homing=False,
-                                            message="Returned to the captured startup pose")
+                            controls.report(
+                                home_requested=False, homing=False, message="Returned to the captured startup pose"
+                            )
                     else:
                         return_goal = None
                         target_pose = tracker.update(leader_fk.pose(action), solver.fk(command), state)
@@ -261,11 +308,18 @@ def main() -> None:
                             command = solver.step(target_pose, command, 1 / args.hz)
                             grip = action["gripper.pos"] / 100.0
                     if args.dry_run and target_pose is not None and tick - printed >= 1:
-                        print(f"{args.side}: tool_xyz_m={target_pose[:3, 3].round(4)} "
-                              f"joints_deg={np.degrees(command).round(2)} gripper={grip:.3f}", flush=True)
+                        print(
+                            f"{args.side}: tool_xyz_m={target_pose[:3, 3].round(4)} "
+                            f"joints_deg={np.degrees(command).round(2)} gripper={grip:.3f}",
+                            flush=True,
+                        )
                         printed = tick
-                    if not args.dry_run:
+                    if not args.dry_run and (not args.remote_server or state["tracking"] or state["home_requested"]):
                         robot.command({args.side: command}, {args.side: grip})
+                    elif args.remote_server and not args.dry_run:
+                        held = call(args.remote_server, "/state")
+                        command = np.asarray(held["goal"], dtype=float)
+                        grip = float(held["goal_grip"])
                     if state["recording_requested"]:
                         measured, measured_grips = robot.read()
                         sample = (measured[args.side], measured_grips[args.side], command.copy(), grip)
@@ -275,8 +329,14 @@ def main() -> None:
                 record_state = controls.snapshot()
                 if record_state["reject_requested"]:
                     message = recorder.reject(current_only=record_state["reject_kind"] == "current")
-                    controls.report(reject_requested=False, recording=False, frames=0, recording_error="",
-                                    saved_episodes=recorder.saved_count(), message=message)
+                    controls.report(
+                        reject_requested=False,
+                        recording=False,
+                        frames=0,
+                        recording_error="",
+                        saved_episodes=recorder.saved_count(),
+                        message=message,
+                    )
                 requested = controls.snapshot()["recording_requested"]
                 if requested and recorder.episode is None:
                     recorder.start()
@@ -285,8 +345,11 @@ def main() -> None:
                     sample = None
                 if not requested and recorder.episode is not None:
                     index = recorder.stop()
-                    controls.report(recording=False, saved_episodes=recorder.writer.total_episodes,
-                                    message=f"Saved example {index} · {root}")
+                    controls.report(
+                        recording=False,
+                        saved_episodes=recorder.writer.total_episodes,
+                        message=f"Saved example {index} · {root}",
+                    )
                 if recorder.episode is not None and sample is not None and tick >= next_frame:
                     recorder.add(*sample)
                     controls.report(frames=recorder.frames)
