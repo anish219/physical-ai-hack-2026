@@ -1,0 +1,99 @@
+{
+  "name": "USB Bundle Pull - CV aligned",
+  "task": "Pull out all USB cables together, move directly to the release pose, and release",
+  "status": "prepared, not executed",
+  "side": "right",
+  "targets_file": "replay-targets.jsonl",
+  "target_url": "http://127.0.0.1:8692/target",
+  "duration_s": 16.875505688509087,
+  "target_count": 506,
+  "source_directory": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647",
+  "original_name": "USB Bundle Pull \u2014 Original",
+  "retained_source_range_s": [
+    0.010645111004123464,
+    14.986401827001828
+  ],
+  "release_pose_source_s": 23.208497180006816,
+  "release_pose_kind": "measured follower joints",
+  "direct_transfer_duration_s": 1.2997489725113818,
+  "direct_transfer_max_joint_speed_rad_s": 0.5,
+  "release_duration_s": 0.6,
+  "release_grip": 0.3422222137451172,
+  "power_commands": false,
+  "hold_commands": false,
+  "input_changes": false,
+  "note": "Replay-only edited motion. The direct transfer and stationary release are planned, not a recorded demonstration.",
+  "videos": {
+    "left": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647/left.mp4",
+    "overhead": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647/overhead.mp4",
+    "right": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647/right.mp4"
+  },
+  "camera_timelines": {
+    "left": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647/left-frames.jsonl",
+    "overhead": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647/overhead-frames.jsonl",
+    "right": "/home/pah/hackathon_data/usb-pull-demos/20261107-191647/right-frames.jsonl"
+  },
+  "initial_approach_max_joint_speed_rad_s": 0.5,
+  "server": "http://127.0.0.1:8692",
+  "aim_time_s": 7.0,
+  "reference_image": "aim-reference.png",
+  "control_hz": 30,
+  "vision": {
+    "strip_polygon": [
+      [
+        245,
+        103
+      ],
+      [
+        328,
+        64
+      ],
+      [
+        367,
+        82
+      ],
+      [
+        275,
+        128
+      ]
+    ],
+    "wire_roi": [
+      207,
+      91,
+      28,
+      39
+    ],
+    "hsv_low": [
+      0,
+      85,
+      60
+    ],
+    "hsv_high": [
+      22,
+      255,
+      255
+    ],
+    "minimum_wire_pixels": 12,
+    "strip_tolerance_px": 2.0,
+    "wire_tolerance_px": 3.0
+  },
+  "servo": {
+    "probe_rad": 0.012,
+    "step_rad": 0.02,
+    "gain": 0.5,
+    "damping": 2.0,
+    "speed_rad_s": 0.2,
+    "settle_s": 0.35
+  },
+  "reference_provenance": {
+    "video": "inspection\\usb-review\\usb-bundle-pull-clean\\review-preview.mp4",
+    "edited_video_time_s": 7.0,
+    "crop_xywh": [
+      852,
+      0,
+      426,
+      240
+    ],
+    "note": "Right wrist pane of the existing review; original recorded approach."
+  }
+}
