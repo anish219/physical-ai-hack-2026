@@ -33,6 +33,9 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 .sequence-step textarea{width:100%;margin-top:10px;min-height:85px}.sequence-row button{padding:9px}
 .sequence-options{display:grid;grid-template-columns:minmax(0,1fr)100px;gap:10px}
 .sequence-options input{width:100%;padding:9px;background:#10171b;color:#edf0f3;border:1px solid #46535d;border-radius:8px}
+.sequence-monitor{margin-top:12px;padding-top:10px;border-top:1px solid #2c3840}
+.sequence-monitor select{width:100%}
+.sequence-monitor textarea{min-height:70px}
 .sequence-editor input{cursor:text}.sequence-progress{margin:14px 0;color:#b5f2cb}
 @media(max-width:720px){body{padding:16px}.grid,.arm-grid{grid-template-columns:1fr}.cameras{gap:6px}.card{padding:18px}}
 </style></head><body><main>
@@ -93,7 +96,7 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 </template>
 <template id="sequence-panel-template">
 <p class="panel-label">Sequence input</p><h2 data-sequence-field="title"></h2>
-<p>Phases run in order. Dream and wait subphases advance when their timers finish. Edits apply to the next run.</p>
+<p>Phases run in order. Dream and wait subphases advance when their timers finish. Each subphase can monitor with a VLM prompt or a registered script. Edits apply to the next run.</p>
 <div class="actions"><button data-sequence-field="run">Run sequence</button><button data-sequence-field="stop">Stop sequence</button></div>
 <p class="sequence-progress" data-sequence-field="status">Idle</p>
 <div class="sequence-editor" data-sequence-field="editor"></div>

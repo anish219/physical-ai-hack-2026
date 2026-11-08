@@ -2,7 +2,9 @@
 
 The original bridge and editor are retained under vendor/leonard_sequences.
 Dream and wait windows advance by time, exactly as in that editor; completion
-does not assert that a manipulation succeeded.
+does not assert that a manipulation succeeded. Each subphase can attach a
+monitor (VLM prompt or registered script pointer). Monitors are evaluated after
+the window; they do not yet gate advancement. See docs/sequence_monitors.md.
 """
 
 import copy
@@ -14,8 +16,15 @@ import time
 import uuid
 
 
+MONITOR_TYPES = ("none", "prompt", "script")
+
+
 def identifier():
     return uuid.uuid4().hex
+
+
+def default_monitor():
+    return {"type": "none", "prompt": "", "script": ""}
 
 
 def default_definitions():
@@ -34,6 +43,7 @@ def default_definitions():
                             "prompt": "Unplug the USB from the port, then move it clear of the workspace.",
                             "modelId": "dreamlabs/dream-1-beta",
                             "durationSeconds": 20,
+                            "monitor": default_monitor(),
                         }
                     ],
                 }
@@ -43,7 +53,31 @@ def default_definitions():
     }
 
 
-def validate_definition(value, *, for_run=False):
+def validate_monitor(step, *, for_run=False, scripts=()):
+    monitor = step.get("monitor")
+    if monitor is None:
+        step["monitor"] = default_monitor()
+        return
+    if not isinstance(monitor, dict) or monitor.get("type") not in MONITOR_TYPES:
+        raise ValueError("Monitor type must be none, prompt, or script")
+    prompt = monitor.get("prompt", "")
+    script = monitor.get("script", "")
+    if not isinstance(prompt, str) or len(prompt) > 1000:
+        raise ValueError("Monitor prompts must be text up to 1000 characters")
+    if not isinstance(script, str) or len(script) > 160:
+        raise ValueError("Monitor script pointers must be text up to 160 characters")
+    if for_run and monitor["type"] == "prompt" and not prompt.strip():
+        raise ValueError("Enter a VLM monitor prompt, or set monitor type to none")
+    if monitor["type"] == "script":
+        pointer = script.strip()
+        if for_run and not pointer:
+            raise ValueError("Select a registered monitor script pointer")
+        if for_run and pointer not in scripts:
+            raise ValueError(f"Unknown monitor script pointer: {pointer}")
+    step["monitor"] = {"type": monitor["type"], "prompt": prompt, "script": script.strip()}
+
+
+def validate_definition(value, *, for_run=False, scripts=()):
     if not isinstance(value, dict) or not isinstance(value.get("phases"), list):
         raise ValueError("A sequence needs an ordered phases list")
     definition = copy.deepcopy(value)
@@ -72,15 +106,66 @@ def validate_definition(value, *, for_run=False):
                     raise ValueError("Enter a Dream checkpoint ID up to 160 characters")
                 if for_run and not step["prompt"].strip():
                     raise ValueError("Enter a prompt for every Dream subphase")
+            validate_monitor(step, for_run=for_run, scripts=scripts)
             step.pop("state", None)
     if for_run and not any(phase["steps"] for phase in definition["phases"]):
         raise ValueError("Add at least one subphase before running the sequence")
     return definition
 
 
+class MonitorRegistry:
+    """Plug-in point for Anish's VLM prompt monitor and named script monitors."""
+
+    def __init__(self):
+        self.scripts = {}
+        self.prompt_evaluator = None
+
+    def register_script(self, pointer, evaluate, *, label=None):
+        if not isinstance(pointer, str) or not pointer.strip() or len(pointer) > 160:
+            raise ValueError("Script pointers must be 1–160 character names")
+        if not callable(evaluate):
+            raise ValueError("Monitor scripts must be callable")
+        self.scripts[pointer.strip()] = {"evaluate": evaluate, "label": label or pointer.strip()}
+
+    def set_prompt_evaluator(self, evaluate):
+        if evaluate is not None and not callable(evaluate):
+            raise ValueError("Prompt evaluator must be callable")
+        self.prompt_evaluator = evaluate
+
+    def pointers(self):
+        return tuple(self.scripts)
+
+    def available_scripts(self):
+        return [{"pointer": pointer, "label": item["label"]} for pointer, item in self.scripts.items()]
+
+    def evaluate(self, monitor, context):
+        kind = (monitor or {}).get("type") or "none"
+        if kind == "none":
+            return {"result": "skipped"}
+        if kind == "prompt":
+            if self.prompt_evaluator is None:
+                return {"result": "unwired", "detail": "No VLM prompt evaluator registered"}
+            return self._normalize(self.prompt_evaluator(monitor.get("prompt", ""), context))
+        if kind == "script":
+            pointer = (monitor.get("script") or "").strip()
+            item = self.scripts.get(pointer)
+            if item is None:
+                return {"result": "unwired", "detail": f"No script registered for {pointer!r}"}
+            return self._normalize(item["evaluate"](context))
+        return {"result": "unwired", "detail": f"Unknown monitor type {kind!r}"}
+
+    def _normalize(self, result):
+        if isinstance(result, str):
+            result = {"result": result}
+        if not isinstance(result, dict) or result.get("result") not in ("yes", "no", "uncertain", "skipped", "unwired"):
+            raise ValueError("Monitors must return yes, no, uncertain, skipped, or unwired")
+        return dict(result)
+
+
 class SequenceRun:
-    def __init__(self, selection, caller, nodes, changed):
+    def __init__(self, selection, caller, nodes, changed, monitors):
         self.selection, self.caller, self.nodes, self.changed = selection, caller, nodes, changed
+        self.monitors = monitors
         self.sides = ("left", "right") if selection == "both" else (selection,)
         self.lock, self.gate = threading.RLock(), threading.Lock()
         self.cancel = threading.Event()
@@ -97,6 +182,7 @@ class SequenceRun:
             error="",
             step_started=None,
             durationSeconds=0,
+            monitor_result=None,
         )
 
     def snapshot(self):
@@ -118,7 +204,7 @@ class SequenceRun:
                 node.control.post("/stop", {})
 
     def start(self, definition):
-        definition = validate_definition(definition, for_run=True)
+        definition = validate_definition(definition, for_run=True, scripts=self.monitors.pointers())
         with self.gate:
             if self.snapshot()["busy"]:
                 raise ValueError("This sequence is already running or finishing a call")
@@ -135,6 +221,7 @@ class SequenceRun:
                 step_label="",
                 step_started=None,
                 durationSeconds=0,
+                monitor_result=None,
             )
             self.thread = threading.Thread(
                 target=self.run, args=(definition, self.cancel), name=f"sequence:{self.selection}", daemon=True
@@ -183,6 +270,26 @@ class SequenceRun:
         with self.gate:
             self.action_active = False
 
+    def observation_context(self, step):
+        arms, camera_urls = {}, {}
+        for side, node in self.nodes.items():
+            arms[side] = node.snapshot()
+            port = getattr(node, "port", None)
+            if port:
+                camera_urls[side] = f"http://127.0.0.1:{port}"
+        return {
+            "selection": self.selection,
+            "sides": self.sides,
+            "step": copy.deepcopy(step),
+            "arms": arms,
+            "camera_urls": camera_urls,
+        }
+
+    def evaluate_monitor(self, step):
+        result = self.monitors.evaluate(step.get("monitor"), self.observation_context(step))
+        self.report(monitor_result=result)
+        return result
+
     def run(self, definition, cancel):
         try:
             for phase_index, phase in enumerate(definition["phases"]):
@@ -203,6 +310,7 @@ class SequenceRun:
                         self.dream_step(step, cancel)
                     if cancel.is_set():
                         return
+                    self.evaluate_monitor(step)
             self.report(state="complete", running=False)
         except Exception as error:
             with self.gate:
@@ -217,15 +325,27 @@ class SequenceRun:
 
 
 class SequenceManager:
-    def __init__(self, callers, nodes, publish, path=None):
+    def __init__(self, callers, nodes, publish, path=None, monitors=None):
         self.lock, self.publish = threading.RLock(), publish
+        self.monitors = monitors or MonitorRegistry()
+        if monitors is None:
+            try:
+                from dream_hackathon.monitor_scripts import register_all
+
+                register_all(self.monitors)
+            except ImportError:
+                pass
         self.path = pathlib.Path(path).expanduser() if path is not None else None
         self.definitions = default_definitions()
         if self.path is not None and self.path.exists():
             saved = json.loads(self.path.read_text(encoding="utf-8"))
-            self.definitions.update({side: validate_definition(value) for side, value in saved.items()})
+            self.definitions.update(
+                {side: validate_definition(value, scripts=self.monitors.pointers()) for side, value in saved.items()}
+            )
         self.revisions = dict.fromkeys(self.definitions, 0)
-        self.runs = {side: SequenceRun(side, callers[side], nodes, self.changed) for side in callers}
+        self.runs = {
+            side: SequenceRun(side, callers[side], nodes, self.changed, self.monitors) for side in callers
+        }
 
     def snapshot(self):
         with self.lock:
@@ -245,7 +365,7 @@ class SequenceManager:
     def update(self, selection, definition):
         if selection not in self.definitions:
             raise ValueError("Choose left, right, or both for Sequences")
-        definition = validate_definition(definition)
+        definition = validate_definition(definition, scripts=self.monitors.pointers())
         with self.lock:
             self.definitions[selection] = definition
             self.revisions[selection] += 1
@@ -257,7 +377,7 @@ class SequenceManager:
     def start(self, selection):
         with self.lock:
             definition = copy.deepcopy(self.definitions[selection])
-        self.runs[selection].start(definition)
+        self.runs[selection].start(validate_definition(definition, for_run=True, scripts=self.monitors.pointers()))
 
     def stop_sides(self, sides):
         for run in self.runs.values():

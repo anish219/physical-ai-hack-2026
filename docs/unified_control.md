@@ -110,7 +110,10 @@ in the preserved README and SOURCE.txt.
 Select **Sequences** under Left, Right, or Both to show a matching control panel.
 Add phases and nested subphases. Each subphase is either a **Dream task** with a
 prompt, checkpoint and action window (1–300 seconds), or a **Wait / checkpoint**
-(0–300 seconds). Run walks the phases and subphases in their defined order; Stop
+(0–300 seconds). Every subphase also has a **Monitor** (`none`, `prompt` for a
+VLM instruction, or `script` for a registered pointer). See
+[sequence_monitors.md](sequence_monitors.md) for the plug-in Anish's model
+should use. Run walks the phases and subphases in their defined order; Stop
 cancels the current action and prevents later steps. Source changes, Return to 0
 and arm-off also cancel affected sequences. Left and Right can run independently;
 Both is one coordinated bimanual sequence and excludes individual inputs.
