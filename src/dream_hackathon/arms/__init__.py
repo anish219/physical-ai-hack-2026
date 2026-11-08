@@ -44,7 +44,7 @@ class Arms(Protocol):
         ...
 
     def command(self, joints: Joints, grips: Grips) -> None:
-        """Sends both arms a target."""
+        """Sends targets only to the sides supplied in joints and grips; omitted arms receive no command."""
         ...
 
     def close(self) -> None:

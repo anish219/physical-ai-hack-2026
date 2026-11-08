@@ -162,6 +162,17 @@ def test_device_set_opens_what_is_ready_and_names_what_is_not(tmp_path):
     assert all(problem is None for problem in station.problems().values())
 
 
+def test_only_selected_arm_link_is_checked(tmp_path):
+    station = Station(tmp_path)
+    station.found.try_open()
+    station.found.select_arms({"left": station.config.arms["left"]})
+    problems = station.problems()
+    assert "left arm link" in problems and "right arm link" not in problems
+    station.found.select_arms({"right": station.config.arms["right"]})
+    problems = station.problems()
+    assert "right arm link" in problems and "left arm link" not in problems
+
+
 def test_device_set_sees_problems_during_a_session(tmp_path):
     station = Station(tmp_path)
     station.found.try_open()

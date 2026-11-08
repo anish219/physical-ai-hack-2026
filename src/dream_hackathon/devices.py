@@ -251,6 +251,14 @@ class DeviceSet:
             else:
                 self._camera_errors.pop(cfg.role, None)
 
+    @property
+    def arm_sides(self) -> set[str]:
+        return set(self._station.arms)
+
+    def select_arms(self, selected: dict[str, config.ArmConfig]) -> None:
+        """Check only the selected arms; changing this opens no hardware."""
+        self._station = dataclasses.replace(self._station, arms=dict(selected))
+
     def statuses(self) -> list[Status]:
         """Every device's state now; opens nothing, so it can run every second, during a session too."""
         found = [self._quest_status()]
@@ -260,7 +268,7 @@ class DeviceSet:
             camera = self.cameras.get(cfg.role)
             problem = camera.problem(CAMERA_LOST_AFTER_S) if camera is not None else self._camera_errors.get(cfg.role)
             found.append(Status(f"camera {cfg.role}", problem or (None if camera is not None else "not open yet")))
-        for side in ("left", "right"):
+        for side in self._station.arms:
             port = self._station.arms[side].port
             problem = arm_link_problem(self._station, side, self._sys_net)
             can_up = over_socketcan(self._station) and can_link_state(port, self._sys_net) == "down"

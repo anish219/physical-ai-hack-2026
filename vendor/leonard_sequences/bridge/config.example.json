@@ -1,0 +1,9 @@
+{
+  "arm": {
+    "side": "right",
+    "port": "REPLACE_WITH_OWN_ARM_CAN_PORT",
+    "driver_id": "REPLACE_WITH_EXISTING_CALIBRATED_DRIVER_ID",
+    "can_interface": "REPLACE_WITH_INSTALLED_DRIVER_CAN_INTERFACE"
+  },
+  "cameras": {}
+}

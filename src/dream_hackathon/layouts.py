@@ -57,15 +57,17 @@ def to_vector(
     joints_rad: dict[str, npt.NDArray[np.float64]],
     grip: dict[str, float],
 ) -> npt.NDArray[np.float32]:
-    """Packs both arms into one recorded vector.
+    """Packs the supplied arms into one recorded vector, in the family's order.
 
     @param arm The arm type, `"yam"`, `"metal"` or `"maker"`.
     @param joints_rad Per side, six joint angles in radians.
     @param grip Per side, the gripper from 0 (closed) to 1 (open).
-    @return `[WIDTH]` float32 in the family's order and gripper unit.
+    @return Float32, seven values per supplied arm, in the family's order and gripper unit.
     """
     parts = []
     for side in SIDE_ORDER[FAMILIES[arm]]:
+        if side not in joints_rad:
+            continue
         parts.append(np.asarray(joints_rad[side], dtype=np.float64))
         parts.append([grip[side] * GRIP_SCALE[arm]])
     return np.concatenate(parts).astype(np.float32)

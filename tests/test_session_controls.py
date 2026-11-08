@@ -96,10 +96,19 @@ def test_the_page_sets_the_task_and_deletes_chosen_episodes(tmp_path: pathlib.Pa
         on_task=controls.set_task,
         on_delete=controls.delete,
         task_of=lambda: controls.task,
+        on_control=controls.set_controlled_arms,
+        control_of=lambda: controls.controlled_arms,
     )
     try:
         status = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{board.port}/api/status", timeout=5).read())
         assert (status["task"], status["can_set_task"], status["can_delete"]) == ("pick up the cube", True, True)
+        assert status["can_select_arms"] and status["controlled_arms"] == "right"
+        for selection in ("left", "both", "right"):
+            assert _post(board, "/api/control", {"arms": selection})[1]["ok"]
+            assert controls.controlled_arms == selection
+        assert not _post(board, "/api/control", {"arms": "invalid"})[1]["ok"]
+        assert controls.controlled_arms == "right"
+        assert _post(board, "/api/control", {"arms": "left"}, headers={})[0] == 403
         assert _post(board, "/api/task", {"task": "open the drawer"})[1]["ok"]
         assert controls.task == "open the drawer"
         assert _post(board, "/api/task", {"task": "x"}, headers={"Content-Type": "application/json"})[0] == 403

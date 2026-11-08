@@ -1,0 +1,30 @@
+{
+  "state": {
+    "left_arm": [0, 6],
+    "left_gripper": [6, 7],
+    "right_arm": [7, 13],
+    "right_gripper": [13, 14],
+    "right_eef_xyz": [14, 17],
+    "right_eef_rot6": [17, 23],
+    "right_grip": [23, 24],
+    "left_eef_xyz": [24, 27],
+    "left_eef_rot6": [27, 33],
+    "left_grip": [33, 34]
+  },
+  "action": {
+    "right_eef_xyz": [0, 3],
+    "right_eef_rot6": [3, 9],
+    "right_grip": [9, 10],
+    "left_eef_xyz": [10, 13],
+    "left_eef_rot6": [13, 19],
+    "left_grip": [19, 20],
+    "left_arm": [20, 26],
+    "right_arm": [26, 32]
+  },
+  "video": {
+    "scene": "observation.images.scene",
+    "wrist_l": "observation.images.left_wrist",
+    "wrist_r": "observation.images.right_wrist"
+  },
+  "head_camera": "scene"
+}

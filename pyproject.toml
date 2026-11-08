@@ -28,6 +28,7 @@ realsense = ["pyrealsense2>=2.55"]
 [project.scripts]
 dhk-collect = "dream_hackathon.collect:main"
 dhk-dataset = "dream_hackathon.dataset_cli:main"
+dhk-dream-caller = "dream_hackathon.dream_caller:main"
 
 [dependency-groups]
 dev = [
@@ -67,6 +68,7 @@ packages = ["src/dream_hackathon"]
 [tool.ruff]
 line-length = 119
 target-version = "py312"
+extend-exclude = ["vendor/leonard_sequences"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]

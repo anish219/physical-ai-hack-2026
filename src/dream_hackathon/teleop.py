@@ -17,6 +17,16 @@ import numpy.typing as npt
 GRIP_ENGAGE = 0.6
 GRIP_RELEASE = 0.4
 
+# The existing collector Home control and the SO-101 Return to 0 button share these.
+HOME_SPEED_RAD_S = 0.5
+HOME_TOLERANCE_RAD = 1e-3
+
+
+def home_step(current: npt.NDArray[np.float64], start: npt.NDArray[np.float64], dt_s: float):
+    """One tick toward the captured startup pose, using the collector's Home motion."""
+    joints = step_toward(current, start, HOME_SPEED_RAD_S * dt_s)
+    return joints, bool(np.all(np.abs(joints - start) <= HOME_TOLERANCE_RAD))
+
 
 @dataclasses.dataclass
 class Clutch:

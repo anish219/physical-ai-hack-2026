@@ -4,4 +4,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 dist/
+!vendor/leonard_sequences/dist/
+!vendor/leonard_sequences/dist/**
 configs/station.yaml

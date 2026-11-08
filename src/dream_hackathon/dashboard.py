@@ -13,7 +13,7 @@ arm's clutch and tool position, warnings, the session's events, and the dataset'
 back. Its actions, which only `dhk-collect` offers: devices' fixes (devices.DeviceSet.apply_fix(): bring a CAN link up
 when it is down, restart the Quest's app when its data stops, restart adb before the Quest is open), setting the task
 text the next episodes record, and deleting chosen episodes (refused while one records; the later ones are
-renumbered). Nothing on it drives the arms. An action is taken only from the page itself (a custom header, and an
+renumbered), and selecting which arms receive Oculus input. An action is taken only from the page itself (a custom header, and an
 `Origin` that matches the page's address), so no other website open in the same browser can send one through the SSH
 tunnel. `scripts/check_cameras.py` serves the same page with the
 cameras alone.
@@ -64,6 +64,8 @@ class Dashboard:
         on_task: Callable[[str], tuple[bool, str]] | None = None,
         on_delete: Callable[[list[int]], tuple[bool, str]] | None = None,
         task_of: Callable[[], str] | None = None,
+        on_control: Callable[[str], tuple[bool, str]] | None = None,
+        control_of: Callable[[], str] | None = None,
     ) -> None:
         """Starts serving.
 
@@ -77,6 +79,8 @@ class Dashboard:
         @param on_task Sets the task text the next episodes record; None offers no task box.
         @param on_delete Deletes episodes by number; None offers no delete.
         @param task_of The task text the next episode records, for the page.
+        @param on_control Selects left, right, or both arms for Oculus input; None hides the selector.
+        @param control_of The requested Oculus arm selection, including before the arms are opened.
         @throws OSError The port is taken.
         """
         self._frame = frame
@@ -87,6 +91,8 @@ class Dashboard:
         self._on_task = on_task
         self._on_delete = on_delete
         self._task_of = task_of
+        self._on_control = on_control
+        self._control_of = control_of
         self._lock = threading.Lock()
         self._snapshot: dict[str, Any] = {}
         self._devices: list[dict[str, Any]] = []
@@ -101,6 +107,10 @@ class Dashboard:
         """Replaces the session's state the page shows; called from the control loop."""
         with self._lock:
             self._snapshot = snapshot
+
+    def dataset_root(self, root: pathlib.Path) -> None:
+        """Selects the dataset matching the arms this session owns."""
+        self._dataset_root = root
 
     def devices(self, statuses: list[devices.Status]) -> None:
         """Replaces the devices' states the page lists."""
@@ -139,6 +149,8 @@ class Dashboard:
                 "phase": self._phase,
                 "task": self._task_of() if self._task_of else None,
                 "can_set_task": self._on_task is not None,
+                "can_select_arms": self._on_control is not None,
+                "controlled_arms": self._control_of() if self._control_of else None,
                 "can_delete": self._on_delete is not None and self._dataset_root is not None,
                 "events": list(self._events),
             }
@@ -196,6 +208,7 @@ def _handler_for(board: Dashboard) -> type[http.server.BaseHTTPRequestHandler]:
             actions = {
                 "/api/fix": board._on_fix,
                 "/api/task": board._on_task,
+                "/api/control": board._on_control,
                 "/api/episodes/delete": board._on_delete,
             }
             action = actions.get(path)
@@ -215,6 +228,8 @@ def _handler_for(board: Dashboard) -> type[http.server.BaseHTTPRequestHandler]:
                     ok, message = action(str(body.get("fix", "")))
                 elif path == "/api/task":
                     ok, message = action(str(body.get("task", "")))
+                elif path == "/api/control":
+                    ok, message = action(str(body.get("arms", "")))
                 else:
                     episodes = body.get("episodes")
                     if not isinstance(episodes, list) or not all(
@@ -362,6 +377,16 @@ PAGE = """<!doctype html>
 <section class="grid">
   <div class="panel">
     <h2>Session</h2>
+    <div id="controlbox" hidden>
+      <label>Oculus controls <select id="armselect">
+        <option value="left">Left arm</option><option value="right" selected>Right arm</option>
+        <option value="both">Both arms</option>
+      </select></label>
+      <div class="muted">One arm: use the right-hand controller. Both: each controller drives its matching arm.
+        Only selected arms are opened and owned. Joystick homing applies to the selected arms.
+        Changing selection ends the current episode and changes its dataset folder.</div>
+      <div id="controlresult" class="actionresult"></div>
+    </div>
     <div id="taskbox" hidden>
       <div>Task for the next episodes: <b id="tasknow"></b></div>
       <form id="taskform"><input id="taskinput" maxlength="512" placeholder="type the task, e.g. put the red cube in the bowl">
@@ -397,6 +422,13 @@ async function postAction(path, body) {
     return reply.ok ? await reply.json() : {ok: false, message: `refused (${reply.status}): ${await reply.text()}`};
   } catch (e) { return {ok: false, message: "could not reach the station"}; }
 }
+let selectingArm = false;
+$("armselect").addEventListener("change", async () => {
+  selectingArm = true;
+  const result = await postAction("/api/control", {arms: $("armselect").value});
+  $("controlresult").textContent = result.message;
+  selectingArm = false;
+});
 
 function beep(freq, times) {
   if (!audio || !$("sound").checked) return;
@@ -465,6 +497,8 @@ function renderDevices(status) {
 function render(status) {
   $("title").textContent = status.title;
   renderDevices(status);
+  $("controlbox").hidden = !status.can_select_arms;
+  if (!selectingArm && status.controlled_arms) $("armselect").value = status.controlled_arms;
   $("taskbox").hidden = !status.can_set_task;
   if (status.task !== null) $("tasknow").textContent = status.task;
   canDelete = !!status.can_delete;
@@ -490,7 +524,8 @@ function render(status) {
     $("session").querySelector(".mono").textContent = s.dataset;
     $("arms").innerHTML = ["left", "right"].map((side) => {
       const a = s.arms[side];
-      return `<div class="arm"><div class="state ${a.engaged ? "on" : ""}">${side}: ${a.engaged ? "driving" : "holding"}</div>
+      if (!a) return `<div class="arm"><div class="state">${side}: owned separately</div></div>`;
+      return `<div class="arm"><div class="state ${a.engaged ? "on" : ""}">${side}: ${a.controlled === false ? "independent" : (a.engaged ? "driving" : "holding")}</div>
         <div class="mono">tool ${a.tool_m.map(fmt).join(" ")} m</div><div class="muted">gripper ${(a.grip * 100).toFixed(0)}% open</div></div>`;
     }).join("");
   }

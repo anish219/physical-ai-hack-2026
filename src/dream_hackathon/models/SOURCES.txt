@@ -1,0 +1,5 @@
+so101_leader.urdf: TheRobotStudio/SO-ARM100, Apache-2.0 (see repository LICENSE).
+Upstream path: Simulation/SO101/so101_leader_new_calib.urdf
+Git blob: 515d19065419e35001061882aa6b3f4e005522a5
+https://github.com/TheRobotStudio/SO-ARM100/blob/main/Simulation/SO101/so101_leader_new_calib.urdf
+Unmodified upstream model. Meshes are discarded at runtime for kinematics.

@@ -64,7 +64,7 @@ class MakerModsArms:
         self._devices: dict[str, Any] = {}
         self._rest_poses: list[tuple[Any, dict[str, float]]] = []
         try:
-            for side in ("left", "right"):
+            for side in station.arms:
                 device = Follower(
                     FollowerConfig(
                         port=station.arms[side].port, id=f"dream_hackathon_{side}", can_interface=mm.can_interface
@@ -85,18 +85,32 @@ class MakerModsArms:
         degrees = dict(zip(self._devices, self._pool.map(self._read_degrees, self._devices.values()), strict=True))
         joints = {side: np.radians([deg[motor] for motor in MOTORS]) for side, deg in degrees.items()}
         grips = {side: _grip(self._arms[side], deg[GRIPPER]) for side, deg in degrees.items()}
+        from dream_hackathon.arm_context import publish
+
+        for side in joints:
+            publish(side, joints[side], grips[side])
         return joints, grips
 
     def command(self, joints: Joints, grips: Grips) -> None:
         if not self.energized:
             raise RuntimeError("a dry run never commands the arms")
         sends = []
-        for side, device in self._devices.items():
+        for side in joints:
+            device = self._devices[side]
             action = {f"{motor}.pos": math.degrees(value) for motor, value in zip(MOTORS, joints[side], strict=True)}
             action[f"{GRIPPER}.pos"] = _gripper_deg(self._arms[side], grips[side])
             sends.append(self._pool.submit(device.send_action, action))
         for send in sends:
             send.result()
+
+    def power_off(self) -> list[str]:
+        """Disable every open follower's motor torque now, without a return motion."""
+        self._rest_poses = []
+        self.energized = False
+        problems = []
+        for side, device in self._devices.items():
+            problems.extend(self._family.release_torque(device, f"{side} follower arm"))
+        return problems
 
     def close(self) -> None:
         """Returns both arms to where they started (makermodslab's gentle rate), releases torque, disconnects."""

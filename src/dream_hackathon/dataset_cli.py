@@ -36,9 +36,11 @@ def list_command(root: pathlib.Path) -> None:
 
 def drop_command(root: pathlib.Path, indices: list[int], *, yes: bool) -> None:
     """Drops episodes after asking, unless `yes`."""
-    holder = station_lock.holder()
-    if holder is not None and holder.get("dataset") == str(root.resolve()):
-        sys.exit(f"a collector is recording into {root} right now ({station_lock.describe(holder)}); stop it first")
+    for holder in station_lock.holders():
+        if holder.get("dataset") == str(root.resolve()):
+            sys.exit(
+                f"a collector is recording into {root} right now ({station_lock.describe(holder)}); stop it first"
+            )
     episodes = {episode.index: episode for episode in dataset.list_episodes(root)}
     unknown = sorted(set(indices) - set(episodes))
     if unknown:

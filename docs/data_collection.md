@@ -44,18 +44,60 @@ Your station is already set up; this is where you start. You teach the model by 
 
 5. For each episode: set the scene, press A, do the task, press A again to save it (B throws it away). Press Ctrl+C when you are done.
 
-Your episodes are saved in `~/hackathon_data/myteam-cubes` on the station ([where your data is stored](#where-your-data-is-stored)). The sections below explain each step.
+Your episodes are saved under `~/hackathon_data/myteam-cubes/left`, `/right`, or `/both` on the station,
+matching the Oculus selection ([where your data is stored](#where-your-data-is-stored)).
 
 ## The controls
 
+The dashboard's **Oculus controls** selector chooses **Left arm**, **Right arm** (the default), or **Both arms**.
+For either single-arm selection, use the right-hand controller's grip, pose and trigger. In Both mode, each
+controller drives its matching arm. You can also choose the initial mode with `--controlled-arms left|right|both`.
+Oculus opens, reads, commands, homes and closes only the selected arms. The other arm can run in a separate process
+using the per-arm ownership API described below. Changing the selection acquires the new arms and closes/releases
+those no longer selected, then reanchors the hand mapping. MakerMods' existing close sequence returns a released
+arm to its session start before releasing torque and ownership. Shutdown touches only arms still owned by Oculus.
+
+Recordings live under `<dataset-dir>/left`, `/right`, or `/both`. A single-arm recording has seven state/action
+values (six joints and one gripper); Both retains the standard 14-value Dream layout. Changing selection ends the
+current episode using the usual save rules before changing folders. Single-arm datasets require a matching custom
+Dream embodiment/runner; the existing bimanual fine-tuning and add-eef tools expect the Both dataset.
+
+### Separate controller processes
+
+For example, run Oculus on the left:
+
+```bash
+uv run dhk-collect --config configs/station.yaml --controlled-arms left
+```
+
+Your custom process should acquire only the right arm and pass only its config to the arm adapter:
+
+```python
+from dream_hackathon import arms, config, station_lock
+from dream_hackathon.arms.session import selected_station
+
+station = selected_station(config.load("configs/station.yaml"), "right")
+with station_lock.acquire_sides("my controller", ["right"]):
+    robot = arms.open_arms(station, energize=True)
+    try:
+        # Your loop reads and commands only right; retain your controller's normal shutdown sequence.
+        joints, grips = robot.read()
+        robot.command(joints, grips)
+    finally:
+        robot.close()
+```
+
+The SO-101 controller in this repo uses `acquire_sides` too. Both processes must use the same station account/lock
+directory. The existing `acquire()` API and external `dreamcli` still own the entire station exclusively.
+
 | Control | Does |
 | --- | --- |
-| Grip (middle finger), held | Drives that controller's arm: the gripper follows your hand |
+| Grip (middle finger), held | Drives the selected arm using the right controller, or the matching arm in Both mode |
 | Grip released | The arm stops where it is; move your hand and grip again to keep going |
 | Index trigger | That arm's gripper: released is open, pulled is closed |
 | A | Starts recording an episode; pressed again, saves it. At the start of a session, once every device is ready, it first opens the arms |
 | B | Throws away the episode being recorded |
-| Right joystick click | Sends both arms back to where they were when the session started (not while recording) |
+| Right joystick click | Sends the selected arms back to where they were when the session started (not while recording) |
 | Ctrl+C (in the terminal) | Ends the session; an episode still recording is thrown away and the arms return to their start |
 
 The arm follows how your hand moves after you grip, not where your hand is. If you run out of reach, release, move your hand back, and grip again, like lifting a mouse off the table. The app reports each controller relative to the headset, so keep your head still and facing the arms while you grip.
