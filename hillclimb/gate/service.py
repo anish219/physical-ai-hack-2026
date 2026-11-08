@@ -98,6 +98,11 @@ class Gate:
         body = body or {}
         if body.get("strip_box"):
             self.strip_box = imaging.clamp_box(body["strip_box"])
+        with self._lock:  # a new round: the old latch never survives, even when this arm fails below
+            self.core.armed, self.core.open, self.core.latched_at = False, False, None
+            self.core.armed_at = time.time()
+            self.core.streak, self.core.last_yes_now_t = 0, None
+        self._save()
         f = self.source.latest()
         if f is None or not self.source.fresh():
             return {"ok": False, "why": "no fresh overhead frame for the reference; gate stays shut"}
@@ -258,7 +263,7 @@ class Gate:
             return {
                 "known": bool(fast_known and healthy) or self.core.open,
                 "open": self.core.open,
-                "armed": self.core.armed,
+                "armed": self.core.armed, "armed_at": self.core.armed_at,
                 "latched_at": self.core.latched_at,
                 # the main controller's verify_usb fields
                 "unplugged_count": max(0, 4 - plugged_now) if plugged_now is not None else 0,

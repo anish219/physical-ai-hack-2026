@@ -42,6 +42,7 @@ class HttpFrameSource(FrameSource):
         self.url = url or settings.overhead_url()
         self.urls = [url] if url else settings.overhead_urls()  # fallbacks: the other arm server's copy of the same camera
         self._stamps: dict[str, float] = {}
+        self._hashes: dict[str, int] = {}
         self.poll_s = float(poll_s or settings.get("GATE_FRAME_POLL_S"))
         self.buffer_s = float(buffer_s or settings.get("GATE_BUFFER_S"))
         self._frames: list[Frame] = []
@@ -68,20 +69,26 @@ class HttpFrameSource(FrameSource):
             return None
 
     def _fetch(self) -> tuple[bytes, float | None] | None:
-        """The first source that answers with a JPEG; a frozen source (stamp not moving) also falls through."""
+        """The first source with a frame newer than that source's own last one; a frozen source falls through.
+        Stamps are tracked per source and the clock check is never reset, so switching sources can't make a stale
+        frame look fresh."""
         for u in self.urls:
             got = self._fetch_one(u)
             if got is None:
                 continue
             stamp = got[1]
             prev = self._stamps.get(u)
-            if stamp is not None and prev is not None and stamp <= prev and u != self.urls[-1]:
+            if stamp is not None and prev is not None and stamp <= prev:
                 continue  # frozen here: try the next server
             if stamp is not None:
                 self._stamps[u] = stamp
+            else:  # no X-Stamp: a byte-identical JPEG is a frozen camera
+                h = hash(got[0])
+                if self._hashes.get(u) == h:
+                    continue
+                self._hashes[u] = h
             if u != self.url:
                 self.url = u
-                self._last_stamp, self._clock_shared = None, None  # another server: its stamps start their own sequence
                 log.event("overhead_source", url=u)
             return got
         return None
@@ -98,9 +105,11 @@ class HttpFrameSource(FrameSource):
             else:
                 errors = 0
                 data, stamp = got
-                if stamp is not None and self._clock_shared is None:
-                    self._clock_shared = abs(started - stamp) < 30.0  # same machine clock, or close enough
-                if stamp is None or self._last_stamp is None or stamp > self._last_stamp:
+                if stamp is not None and abs(started - stamp) < 30.0:
+                    self._clock_shared = True  # same machine clock; once seen, a stale stamp always fails the age check
+                elif stamp is not None and self._clock_shared is None:
+                    self._clock_shared = False
+                if True:  # _fetch already refused a stamp that did not move on for its source
                     t = stamp if (stamp is not None and self._clock_shared) else started
                     with self._lock:
                         self._frames.append(Frame(t, data, stamp))

@@ -104,11 +104,19 @@ class LeftController:
             for k, v in (cfg or {}).items():
                 if not hasattr(new, k):
                     return False, f"unknown setting {k}"
-                setattr(new, k, type(getattr(new, k))(v))
+                cur = getattr(new, k)
+                if isinstance(cur, bool):
+                    if isinstance(v, str):
+                        v = v.strip().lower() in ("1", "true", "yes", "on")
+                    setattr(new, k, bool(v))
+                else:
+                    setattr(new, k, type(cur)(v))
             if new.mode != "practice" and "gate_bypass" not in (cfg or {}):
                 new.gate_bypass = False  # a bypass left over from a practice round never carries into a match
             if new.gate_bypass and new.mode != "practice":
                 return False, "gate_bypass is practice only"
+            if new.gate_bypass and os.environ.get("HILLCLIMB_MATCH_LOCK") == "1":
+                return False, "HILLCLIMB_MATCH_LOCK=1 on this station: the USB gate can't be bypassed"
             if new.crunch_goal > new.max_goal:
                 return False, "crunch_goal must not exceed max_goal"
             self.settings = new
@@ -142,6 +150,12 @@ class LeftController:
                 return False, "round already running"
             if self.backend is None:
                 self.backend = self._make_backend()
+            if self.go_wall is not None:  # Go after END without a new arm: a clean round, nothing carried over
+                self.tower, self.stage2_passed, self.faults, self.last_step, self._prepared = [], False, 0, {}, False
+                self._job_result = None
+                self._gate_file(False)
+                if hasattr(self.backend, "prepared"):
+                    self.backend.prepared = False
             self.go_wall, self.estop = self.clock(), False
             self._set("LOCKED", "go")
             self._save(force=True)
@@ -155,8 +169,7 @@ class LeftController:
             self._save(force=True)
 
     def emergency_stop(self) -> None:
-        with self.lock:
-            self.estop = True
+        self.estop = True  # a plain flag write; /stop must not wait behind a tick holding the lock
         self.arm.stop()
         self._safe(lambda: self.backend and self.backend.hold())
         with self.lock:
@@ -250,6 +263,8 @@ class LeftController:
 
     def tick(self) -> None:
         self._refresh_gate()
+        # the arm check is an HTTP call: made before taking the lock so Stop, E-stop and the page never wait on it
+        pre_off = self._arm_off_reason() if self.go_wall is not None and self.state in ("LOCKED", "FAULT", "RECOVER") else None
         with self.lock:
             s, st = self.settings, self.state
             tl = self.time_left()
@@ -270,11 +285,32 @@ class LeftController:
                 self._finish_job()
                 self._save()
                 return
-            off = self._arm_off_reason() if st in ("LOCKED", "FAULT", "RECOVER") else None
+            off = pre_off if st in ("LOCKED", "FAULT", "RECOVER") else None
             if off and st in ("LOCKED", "FAULT"):
-                self.reason = off  # nothing is started while the arm is off: no prepare, no recover loop hammering a dead arm
+                # nothing else starts while the arm is off. A round that is running turns its own arm on (POST /power,
+                # holds position, no motion), as the team's arm client does; at most every 10 s, 3 tries a round
+                tries = getattr(self, "_power_tries", (None, 0, 0.0))
+                n = tries[1] if tries[0] == self.go_wall else 0
+                was_on = getattr(self, "_arm_on_round", None) == self.go_wall  # someone turned it off mid-round: leave it off
+                if was_on:
+                    self.reason = "LEFT ARM WAS TURNED OFF DURING THE ROUND: not turning it back on (stop and Start again to resume)"
+                    self._save()
+                    return
+                if "ARM IS OFF" in off and n < 3 and time.time() - (tries[2] if tries[0] == self.go_wall else 0.0) >= 10.0:
+                    self._power_tries = (self.go_wall, n + 1, time.time())
+                    self._arm_chk_t = 0.0  # re-read the arm right after the try
+                    self._start_job("power", lambda: self._power_on())
+                    self.reason = f"left arm is off: turning it on (try {n + 1} of 3)"
+                else:
+                    self.reason = off if n < 3 or "ARM IS OFF" not in off else off + "; 3 power-on tries failed"
                 self._save()
                 return
+            if st in ("STACK", "SETTLE_CHECK", "REST", "RECOVER", "FAULT") and not self.gate_open():
+                self._set("LOCKED", "USB gate not open: no block is touched")  # a resume, a reset gate, a lost reading
+                self._save()
+                return
+            if off is None and ("ARM IS OFF" in (self.reason or "") or (self.reason or "").startswith("left arm is off")):
+                self.reason = "left arm on"
             if st == "LOCKED":
                 if not self._prepared:
                     self._prepared = True
@@ -291,7 +327,7 @@ class LeftController:
                     self._set("REST", "goal met")
                     self._start_job("retreat", lambda: self.backend.retreat())
                 elif s.drive == "auto":
-                    self._start_job("place", lambda: self.backend.place_next(self._scene(), min(s.step_timeout_s, tl)))
+                    self._start_job("place", lambda: self.backend.place_next(self._scene(), max(1.0, min(s.step_timeout_s, tl - s.freeze_s))))
             elif st == "REST":
                 if len(self.tower) < self.active_goal() and tl > s.freeze_s:
                     self._set("STACK", "below goal")
@@ -302,10 +338,14 @@ class LeftController:
                 if tl <= s.freeze_s:
                     self._set("FREEZE", "freeze window")
                 elif s.drive == "auto":
-                    self._start_job("recover", lambda: self.backend.recover(self._scene(), min(s.step_timeout_s, tl)))
+                    self._start_job("recover", lambda: self.backend.recover(self._scene(), max(1.0, min(s.step_timeout_s, tl - s.freeze_s))))
             elif st == "FAULT":
-                if self.clock() - self.state_since >= s.fault_wait_s:
-                    self._set("RECOVER", "after fault")
+                self._fault_streak = getattr(self, "_fault_streak", 0)
+                if self.clock() - self.state_since >= min(30.0, s.fault_wait_s * (2 ** min(self._fault_streak, 4))):
+                    self._fault_streak += 1
+                    if self.backend is not None and hasattr(self.backend, "prepared"):
+                        self.backend.prepared = False  # the next place_next looks again and re-plans around the standing tower
+                    self._set("STACK", "after fault: looking again (the tower is kept; only a seen fall rebuilds)")
             self._save()
 
     # ---------------------------------------------------------------- one step at a time
@@ -390,6 +430,10 @@ class LeftController:
                 self._set("FAULT", res.get("why", "left arm is off"))
             self.log.write("step", **self.last_step)
             return out
+        if kind == "power":  # a power-on try: the tick re-reads the arm; never a fault or a placement
+            self.last_step = {**res, "counted": False}
+            self.log.write("step", **self.last_step)
+            return out
         if kind in ("prepare", "retreat"):
             self.last_step = {k: v for k, v in res.items()}
             if not res.get("ok", True) and res.get("raised"):
@@ -406,7 +450,9 @@ class LeftController:
             self.log.write("step", **self.last_step)
             return out
         self.faults = 0
-        grew = self._confirm(res, before)
+        grew = False if kind == "recover" else self._confirm(res, before)
+        if grew:
+            self._fault_streak = 0
         if grew and isinstance(res.get("tower"), list) and res.get("verified"):
             # the scripted backend keeps the tower bottom first (a base already on the table, an adopted tower): that list is the count
             self.tower = [{"id": b, "t": round(self.clock(), 2), "level": i + 1} for i, b in enumerate(res["tower"])]
@@ -520,6 +566,14 @@ class LeftController:
         except Exception as e:  # noqa: BLE001
             self.log.write("safe_call_error", error=repr(e)[:200])
 
+    def _power_on(self) -> dict:
+        st = self.arm.power_on()
+        if st is None:
+            return {"ok": False, "why": f"power-on failed: {self.arm.last_error}"}
+        ok = bool(st.get("arm_open")) and not st.get("problems")
+        self.log.write("power_on", ok=ok, message=st.get("message"), problems=st.get("problems"))
+        return {"ok": ok, "why": "" if ok else ("power-on: " + "; ".join(st.get("problems") or [st.get("message") or "arm still off"]))[:200]}
+
     def _arm_off_reason(self) -> str | None:
         """None while the left arm answers with joints and is enabled; else a plain reason. Cached 1 s."""
         now = time.time()
@@ -532,6 +586,8 @@ class LeftController:
             why = "LEFT ARM IS OFF (server says enabled false, no joints): power it on; the round waits, nothing moves"
         else:
             why = None
+            if self.go_wall is not None:
+                self._arm_on_round = self.go_wall  # seen on during this round
         self._arm_chk_t, self._arm_chk = now, why
         self.health["left_arm"] = why or "ok"
         return why

@@ -75,6 +75,20 @@ class ArmClient:
             return False
         return self._req("/move", {"q": list(q), "grip": grip, "rate": rate}) is not None
 
+    def power_on(self, wait_s: float = 15.0) -> dict | None:
+        """POST /power {"enabled": true}: the arm server opens the arm and holds where it is (no motion), as the team's
+        own arm client does before it drives an arm. Blocks until the server reports done; None on failure."""
+        import json as _json
+        import urllib.request as _u
+        try:
+            req = _u.Request(self.base.rstrip("/") + "/power", _json.dumps({"enabled": True}).encode(),
+                             {"Content-Type": "application/json"})
+            with _u.urlopen(req, timeout=wait_s) as r:
+                return _json.loads(r.read())
+        except Exception as e:  # noqa: BLE001
+            self.last_error = f"/power: {type(e).__name__}: {e}"[:200]
+            return None
+
     def stop(self) -> bool:
         """Hold where it is. Always allowed: stopping is never locked."""
         return self._req("/stop", {}) is not None

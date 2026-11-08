@@ -370,6 +370,9 @@ class RunnerBackend:
     def recover(self, scene=None, deadline_s=180.0):
         """Every piled or touching block apart on the table (a tumbled tower); the tower is then re-planned."""
         T0 = _wall.time()
+        gate = os.environ.get("GATE_FILE")
+        if gate and not os.path.exists(gate):  # a recover touches blocks: never before the USB gate
+            return {"ok": False, "why": "USB gate shut", "timing": {"s": 0.0}}
         ab = getattr(O, "ABORT", None)
         if ab is not None:
             ab.clear()

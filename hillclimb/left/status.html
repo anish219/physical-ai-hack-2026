@@ -68,7 +68,7 @@
   <button onclick="restartRound()">Restart round</button>
   <button onclick="act('/left/stop','Stop')">Stop</button>
   <button class="danger" onclick="act('/left/estop','E-stop')">E-stop left</button>
-  <label class="toggle" id="bypass_lbl"><input type="checkbox" id="bypass" onchange="bypassChanged()"> Practice: bypass USB gate</label>
+  <label class="toggle" id="bypass_lbl"><input type="checkbox" id="bypass" onchange="bypassChanged()"> <span id="bypass_txt">Next Start: practice, skip the USB gate</span></label>
   <span class="toast" id="toast"></span>
 </div>
 <details id="det"><summary>Round settings (used by Start and Restart)</summary>
@@ -163,6 +163,11 @@ async function tick(){
   const L = d.left || {}, G = d.gate || {}; S = L.settings || {};
   if (!settingsLoaded && L.settings) { const s = Object.assign({}, L.settings); delete s.gate_bypass; $("settings").value = JSON.stringify(s, null, 1); $("bypass").checked = !!L.settings.gate_bypass; bypassChanged(); settingsLoaded = true; $("toast").textContent = ""; }
   const bypass = !!(S.gate_bypass && S.mode === "practice");
+  const running = !["IDLE","END",undefined].includes(L.state);
+  $("bypass").disabled = running;
+  if (running) { $("bypass").checked = bypass; $("bypass_lbl").classList.toggle("on", bypass);
+    $("bypass_txt").textContent = bypass ? "This round: practice, USB gate skipped" : "This round: match, waits for the USB gate"; }
+  else { $("bypass_txt").textContent = "Next Start: practice, skip the USB gate"; }
   $("p_mode").textContent = S.mode || "?"; $("p_backend").textContent = S.backend || "?";
   $("p_bypass").style.display = bypass ? "" : "none"; $("p_bypass").className = "pill red";
   const h = L.health || {}; const bad = Object.entries(h).filter(([k,v]) => k !== "heartbeat" && v !== "ok" && v !== true).map(([k]) => k);
@@ -200,8 +205,11 @@ async function tick(){
   else if (L.state === "LOCKED") {
     if (bypass) { b = "GATE BYPASSED (practice): planning, then stacking"; cls = "bypass"; }
     else if (!G.armed) { b = "WAITING: the USB gate is not armed"; sub = "it retries every 2 s; the overhead camera is not answering on either arm server"; cls = "wait"; }
-    else { b = "WAITING FOR USB: the right arm has not unplugged and laid a cable on the table yet"; cls = "wait";
-      sub = `left is planning only, it will not touch blocks. ${nReads} recent reads; last ${lastRead ? ago(lastRead.t) + ": " + verdictText(lastRead) : "none yet"}`; }
+    else { b = "WAITING FOR THE USB CABLE"; cls = "wait";
+      const a = (lastRead && lastRead.answer) || {};
+      const seen = lastRead ? (lastRead.yes ? "a cable looks unplugged and on the table: confirming" :
+        (a.plugged_now !== undefined ? `no new cable out yet (${a.plugged_now} plugged in the hub now)` : "no cable out yet")) : "first camera check starting";
+      sub = `Left won't touch a block until a cable is out of the hub and lying on the table. Camera: ${seen}${lastRead ? ", checked " + ago(lastRead.t) : ""}.`; }
   }
   else if (["STACK","SETTLE_CHECK"].includes(L.state)) {
     b = (L.state === "STACK" ? `STACKING block ${tower + 1} of goal ${goal}` : `CHECKING the last placement (tower ${tower})`); cls = bypass ? "bypass" : "go";
@@ -227,7 +235,9 @@ async function timeline(){
     $("timeline").innerHTML = (r.events || []).map(e => `<div><span class="t">${hhmmss(e.t)}</span>${e.text.replace(/</g,"&lt;")}</div>`).join("") || '<div class="dim">no events yet</div>';
   } catch(e){}
 }
-function cams(){ const t = Date.now(); ["overhead","left_wrist","right_wrist"].forEach(n => { const i = $("c_"+n); const img = new Image(); img.onload = () => { i.src = img.src; }; img.src = `/cam/${n}.jpg?t=${t}`; }); }
+function cams(){ const t = Date.now(); ["overhead","left_wrist","right_wrist"].forEach(n => { const i = $("c_"+n); const img = new Image(); const cap = i.parentElement.querySelector("figcaption"); const label = n.replace("_"," ");
+    img.onload = () => { i.src = img.src; cap.textContent = label; };
+    img.onerror = () => { i.removeAttribute("src"); cap.textContent = label + ": no picture" + (n === "left_wrist" ? " (left arm is off)" : ""); }; img.src = `/cam/${n}.jpg?t=${t}`; }); }
 setInterval(tick, 1000); setInterval(right, 1500); setInterval(timeline, 2000); setInterval(cams, 600);
 tick(); right(); timeline(); cams();
 </script>

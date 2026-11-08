@@ -122,7 +122,8 @@ def _rearm_until_armed(go_wall) -> None:
         ctl = _CTL
         if ctl is None or ctl.go_wall != go_wall or ctl.state != "LOCKED":
             return
-        if (ctl.gate_cache or {}).get("armed"):
+        g = ctl.gate_cache or {}
+        if g.get("armed") and float(g.get("armed_at") or 0) >= float(go_wall or 0) - 5.0:
             return
         r = _arm_gate()
         if r.get("ok"):
@@ -168,7 +169,8 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
         def _go(self, body):
             ok, why = ctl.go()
             gate = None
-            if ok and not (body or {}).get("keep_gate"):  # one Go: the gate takes its reference and resets its latch
+            keep = bool((body or {}).get("keep_gate")) and ctl.settings.mode == "practice" and ctl.settings.gate_bypass
+            if ok and not keep:  # one Go: the gate takes its reference and resets its latch
                 gate = _arm_gate()
                 if not (gate or {}).get("ok"):  # no fresh overhead frame yet: keep trying while this round waits
                     go_wall = ctl.go_wall
@@ -190,6 +192,8 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
                         return self._send(404, {"error": "no such camera"})
                     arm, which = cams[name]
                     f = arm.frame(which)
+                    if f is None and name == "overhead" and "overhead_alt" in cams:  # the other arm server serves the same camera
+                        f = cams["overhead_alt"][0].frame("overhead")
                     if f is None:
                         return self._send(503, {"error": "camera unavailable"})
                     return self._send(200, raw=f[0], ctype="image/jpeg")
@@ -255,7 +259,8 @@ def build(port: int | None = None, ctl: LeftController | None = None) -> tuple[T
     ctl = ctl or LeftController()
     right = ArmClient(CFG["RIGHT_URL"])
     over = ctl.overhead
-    cams = {"overhead": (over, "overhead"), "left_wrist": (ctl.arm, "wrist"), "right_wrist": (right, "wrist")}
+    cams = {"overhead": (over, "overhead"), "left_wrist": (ctl.arm, "wrist"), "right_wrist": (right, "wrist"),
+            "overhead_alt": (right, "overhead")}
     srv = ThreadingHTTPServer(("0.0.0.0", port or CFG["HILLCLIMB_PORT"]), make_handler(ctl, cams))
     srv.daemon_threads = True
     return srv, ctl
