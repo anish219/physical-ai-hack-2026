@@ -473,7 +473,7 @@ class Loop:
                 cands[c] = [dict(A, level=A["level"] - 1, iou=0.0, blob=-1, hidden=True) for o in COLOURS if o != c
                             for A in cands[o] if A["level"] >= 1]
         # other colours (red, orange sticks and balls): all obstacles
-        from vision.locate import HUES, SAT_MIN, VAL_MIN
+        from hillclimb.runner.vision.locate import HUES, SAT_MIN, VAL_MIN
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         obst = []
         for c in ("red", "orange"):

@@ -28,7 +28,7 @@ from .loop import DreamLoop
 DEFAULT_CHECKPOINT = "dream-1-ft:f9ed26ed-blocks-left-fresh500-20261108"
 HOLD_MIN_S = 1.5
 AFTER_RELEASE_S = 2.0
-OPEN_IS = 0.70  # normalized jaw opening that counts as open
+OPEN_MARGIN = 0.05  # released: no longer holding and opened this much past the width it held at
 BLOCK_H = 0.0345
 TABLE_Z = -0.008
 
@@ -109,8 +109,8 @@ class DreamBackend:
             ev["policy_s"] = round(time.time() - t_go, 1)
             res["timing"] = ev
             released = ev.get("why") == "released"
-            res["ok"] = released
-            res["grew"] = bool(released and ev.get("released_in_column", True))
+            res["ok"] = released or bool(ev.get("maybe_placed"))
+            res["grew"] = bool((released and ev.get("released_in_column", True)) or ev.get("maybe_placed"))
             res["why"] = ev.get("why", "")
             if released and ev.get("release_xy") and not self.tower_xy and ev.get("released_in_column", True):
                 self.tower_xy = tuple(ev["release_xy"])  # learned: where the first good place happened
@@ -166,6 +166,7 @@ class DreamBackend:
         hold_since = None
         held_long = False
         let_go = None
+        g_held = None
         refused0 = self.loop.status["rows_refused"]
         while True:
             t = time.time() - t_go
@@ -179,12 +180,13 @@ class DreamBackend:
             g = float(st.get("grip", 1.0))
             if holding:
                 hold_since = hold_since if hold_since is not None else t
+                g_held = g
                 if not held_long and t - hold_since >= HOLD_MIN_S:
                     held_long = True
                     ev["grasp_s"] = round(hold_since, 1)
             else:
                 hold_since = None
-            if held_long and not holding and g > OPEN_IS and let_go is None:
+            if held_long and not holding and g_held is not None and g > g_held + OPEN_MARGIN and let_go is None:
                 let_go = t
                 ev["release_s"] = round(t, 1)
                 geo = G.geometry()
@@ -198,5 +200,10 @@ class DreamBackend:
                 ev["why"] = "released"
                 break
             time.sleep(0.1)
+        if ev["why"] == "deadline" and held_long and let_go is None:
+            st = self.loop.last_state or {}
+            if not st.get("grip_holding"):
+                ev["why"] = "deadline after a grasp, jaw now empty"  # it may have placed: the controller's vision decides
+                ev["maybe_placed"] = True
         ev["rows_refused"] = self.loop.status["rows_refused"] - refused0
         return ev

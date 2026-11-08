@@ -417,7 +417,7 @@ class Tall(D.Loop):
         every believed block as a 3D wireframe box (level, flat or on its side) labelled by id, the jaw CAD in the
         wrist view. Overhead through calib/arm_left.json's camera (about 10 cm off, shown as is)."""
         try:
-            from vision.locate import Camera
+            from hillclimb.runner.vision.locate import Camera
             stems = sorted(self.op.run.glob(f"*-check-{bid}.json"))
             if not stems:
                 return

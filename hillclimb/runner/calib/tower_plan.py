@@ -342,7 +342,7 @@ class WristView:
     @staticmethod
     def colour_mask(bgr, colour, jaws):
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        from vision.locate import HUES, SAT_MIN, VAL_MIN
+        from hillclimb.runner.vision.locate import HUES, SAT_MIN, VAL_MIN
         m = np.zeros(hsv.shape[:2], bool)
         for lo, hi in HUES[colour]:
             m |= (hsv[..., 0] >= lo) & (hsv[..., 0] < hi)

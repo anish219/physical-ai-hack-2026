@@ -45,7 +45,7 @@ class SimOverhead:
 
 class RealOverhead:
     def __init__(self):
-        from vision.locate import Camera
+        from hillclimb.runner.vision.locate import Camera
         import os
         c = json.loads((ROOT / "calib" / os.environ.get("OVERHEAD_CAM", "cam_mid_nov8.json")).read_text())
         if "fovy_deg" not in c:  # the Nov 8 refit gives f (pixels) instead

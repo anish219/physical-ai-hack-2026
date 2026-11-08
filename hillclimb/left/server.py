@@ -115,7 +115,14 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
                     return self._send(200 if ok else 409, {"ok": ok, "why": why})
                 if p == "/left/go":
                     ok, why = ctl.go()
-                    return self._send(200 if ok else 409, {"ok": ok, "why": why})
+                    gate = None
+                    if ok and not (body or {}).get("keep_gate"):  # one Go: the gate takes its reference and resets its latch
+                        g = gate_module()
+                        try:
+                            gate = g.http_handler("POST", "/gate/arm", {})[1] if g is not None else {"error": "gate unavailable"}
+                        except Exception as e:  # noqa: BLE001
+                            gate = {"error": repr(e)[:200]}
+                    return self._send(200 if ok else 409, {"ok": ok, "why": why, "gate": gate})
                 if p == "/left/stop":
                     ctl.stop_round()
                     return self._send(200, {"ok": True})

@@ -365,8 +365,8 @@ def fetch(cam):
 
 def overhead_blocks(data):
     from hillclimb.runner.calib.fit_overhead import TABLE_TOP_ROW
-    from vision.locate import Camera, track
-    from vision.track_real import IGNORE
+    from hillclimb.runner.vision.locate import Camera, track
+    from hillclimb.runner.vision.track_real import IGNORE
     cam = Camera.from_calib(json.loads((ROOT / "calib" / "cam_mid.json").read_text()))
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     out = {}

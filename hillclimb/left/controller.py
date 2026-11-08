@@ -37,6 +37,7 @@ class Settings:
     checkpoint: str = "dream-1-ft:f9ed26ed-blocks-left-fresh500-20261108"
     wording: str = ""  # empty: the checkpoint's own table
     mode: str = "practice"  # practice | match (match locks every setting at go)
+    gate_bypass: bool = False  # practice only: treat the USB gate as open (stacking tests without the USB arm); refused in match
     drive: str = "auto"  # auto: this controller places blocks; external: the main controller calls /left/stack_next
     round_s: float = 300.0
     max_goal: int = 9
@@ -104,6 +105,8 @@ class LeftController:
                 if not hasattr(new, k):
                     return False, f"unknown setting {k}"
                 setattr(new, k, type(getattr(new, k))(v))
+            if new.gate_bypass and new.mode != "practice":
+                return False, "gate_bypass is practice only"
             if new.crunch_goal > new.max_goal:
                 return False, "crunch_goal must not exceed max_goal"
             self.settings = new
@@ -171,6 +174,8 @@ class LeftController:
         return len(self.tower) * self.settings.block_height_mm / IN
 
     def gate_open(self) -> bool:
+        if self.settings.gate_bypass and self.settings.mode == "practice":
+            return True
         return bool(self.gate_cache.get("open")) and self.gate_cache.get("known", True) is not False
 
     def motion_allowed(self) -> bool:
