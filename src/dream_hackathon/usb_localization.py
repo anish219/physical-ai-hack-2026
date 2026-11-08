@@ -142,7 +142,8 @@ class HeldUSB:
             tip = body_tip - direction * body_width * self.settings.get('metal_tip_width_ratio', 0.0)
             basis = np.column_stack([across, direction])
             candidates.append((distance, tip, basis, {'plug_center': center.tolist(), 'plug_tip': tip.tolist(),
-                                                     'plug_axis': direction.tolist(), 'plug_width_px': float(body_width),
+                                                     'plug_axis': direction.tolist(),
+                                                     'plug_width_px': float(body_width),
                                                      'gripper_association': association}))
         if not candidates:
             raise ValueError('Held USB body not localized in the gripper region')

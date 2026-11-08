@@ -26,8 +26,8 @@ def test_recorded_near_frame_triggers_but_requires_further_alignment():
     assert status['error_px'] > vision.settings['align_tolerance_px']
 
 
-def test_earlier_recorded_frame_does_not_take_over():
-    _, status, _ = detector().measure(cv2.imread(str(ASSETS / 'before-frame-450.png')))
+def test_distant_recorded_frame_does_not_take_over():
+    _, status, _ = detector().measure(cv2.imread(str(ASSETS / 'far-frame-420.png')))
     assert not status['near_opening']
 
 
@@ -105,16 +105,19 @@ def test_policy_yields_before_first_command_and_no_grab_or_release_is_added(monk
             return None, {'near_opening': self.calls >= 3, 'aligned': True}, None
 
     monkeypatch.setattr(insertion, 'servo', lambda *args: np.zeros(6))
-    monkeypatch.setattr(insertion, 'play', lambda arm, rows, hz: events.append(('play', rows)))
+    def descend(arm, vision, kinematics, settings, grip, report):
+        events.append(('descend', grip))
+        return {'descent_complete': True}
+
+    monkeypatch.setattr(insertion, 'descend', descend)
     plan = {'poll_seconds': 0, 'servo': {}, 'hz': 30, 'demonstrations': [demo([0, 0, 0], [0, 0, -0.01])],
-            'push_samples': 3, 'push_seconds': 2, 'release_grip': None}
+            'cartesian': {}, 'release_grip': None}
     result = insertion.execute(Arm(), Vision(), plan, CartesianKinematics(),
                                lambda *args: None, lambda: events.append(('policy_stop',)), sleep=lambda t: None)
     assert events[0] == ('policy_stop',)
     assert events[1] == ('command', 0.12)
-    assert events[2][0] == 'play'
+    assert events[2] == ('descend', 0.12)
     assert len(events) == 3
-    assert all(row['grip'] == 0.12 for row in events[2][1])
     assert result['push_complete'] and not result['insertion_verified'] and not result['release_commanded']
 
 
@@ -138,7 +141,7 @@ def test_cli_waits_for_async_policy_to_yield_and_emits_one_result(monkeypatch, t
         requests.append(value)
         return io.BytesIO(json.dumps(next(replies)).encode())
 
-    def execute(*args):
+    def execute(*args, **kwargs):
         args[-1]()  # Wait for the policy-stop callback before becoming the target producer.
         requests.append('motion')
         return {'push_complete': True, 'insertion_verified': False}
@@ -156,3 +159,25 @@ def test_cli_waits_for_async_policy_to_yield_and_emits_one_result(monkeypatch, t
     assert requests[1:3] == ['http://policy/state', 'http://policy/state']
     assert requests[3] == 'motion'
     assert json.loads(capsys.readouterr().out) == {'push_complete': True, 'insertion_verified': False}
+
+
+def test_align_only_does_not_start_descent_or_release(monkeypatch):
+    class Arm:
+        def image(self):
+            return None
+
+        def state(self):
+            return np.zeros(6), 0.1
+
+        def command(self, q, grip):
+            assert grip == 0.1
+
+    class Vision:
+        def measure(self, image):
+            return None, {'near_opening': True, 'aligned': True}, None
+
+    monkeypatch.setattr(insertion, 'servo', lambda *args: np.zeros(6))
+    monkeypatch.setattr(insertion, 'descend', lambda *args: pytest.fail('Align-only descended'))
+    result = insertion.execute(Arm(), Vision(), {'release_grip': 1.0, 'servo': {}}, None,
+                               lambda *args: None, align_only=True)
+    assert result['aligned'] and not result['descent_complete'] and not result['release_commanded']

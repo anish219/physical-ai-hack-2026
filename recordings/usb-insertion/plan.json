@@ -2194,20 +2194,20 @@
   "vision": {
     "port_polygon": [
       [
-        230,
-        193
+        207,
+        176
       ],
       [
-        341,
-        179
+        335,
+        158
       ],
       [
-        352,
-        243
+        355,
+        246
       ],
       [
-        305,
-        257
+        304,
+        258
       ]
     ],
     "port_point": [
@@ -2237,7 +2237,30 @@
     ],
     "near_error_px": 65,
     "near_gap_px": 55,
-    "align_tolerance_px": 3
+    "align_tolerance_px": 3,
+    "grip_anchor": [
+      0.5,
+      0.65
+    ],
+    "grip_base": [
+      0.5,
+      1.0
+    ],
+    "grip_search_radius": 0.35,
+    "grip_max_body_y": 0.78,
+    "plug_min_aspect": 1.2,
+    "plug_max_aspect": 6.0,
+    "plug_min_width_px": 3,
+    "grip_axis_cosine": 0.7,
+    "minimum_port_inliers": 6,
+    "minimum_port_coverage": 0.08,
+    "descriptor_ratio": 0.75,
+    "affine_tilts": [
+      1.0,
+      0.8,
+      0.6,
+      0.4
+    ]
   },
   "servo": {
     "probe_rad": 0.006,
@@ -2258,5 +2281,9 @@
     "settle_s": 0.15,
     "hz": 20,
     "depth_tolerance_m": 0.0004
-  }
+  },
+  "view_images": [
+    "far-frame-420.png",
+    "view-frame-600.png"
+  ]
 }

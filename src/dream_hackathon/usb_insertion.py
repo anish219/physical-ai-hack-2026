@@ -159,7 +159,7 @@ def prepare(dataset, selections, output):
             'cartesian': {'distance_m': 0.028, 'speed_m_s': 0.0015, 'probe_m': 0.0006,
                           'lateral_gain': 0.3, 'lateral_step_m': 0.001, 'adapt_gain': 0.1,
                           'motion_rad_s': 0.15, 'settle_s': 0.15, 'hz': 20, 'depth_tolerance_m': 0.0004},
-            'vision': {'port_polygon': [[230, 193], [341, 179], [352, 243], [305, 257]],
+            'vision': {'port_polygon': [[207, 176], [335, 158], [355, 246], [304, 258]],
                        'port_point': [316, 203], 'plug_roi': [285, 185, 65, 58],
                        'hsv_low': [0, 80, 60], 'hsv_high': [25, 255, 255],
                        'minimum_plug_pixels': 15, 'plug_axis_hint': [0, 1],
