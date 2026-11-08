@@ -35,7 +35,8 @@ DEFAULTS = {
     "JAW_OPEN_MIN": 0.10,
     "JAW_OPEN_MIN_S": 0.3,
     "JAW_POLL_S": 0.2,
-    "GATE_STATE_MAX_AGE_S": 2.0,  # jaw state older than this makes the gate unhealthy
+    "GATE_STATE_MAX_AGE_S": 2.0,
+    "JAW_REQUIRED": False,  # Nov 8 12:43: a real unplug-and-rest was blocked by the jaw rule (live right grip reads 0.10-0.20)  # jaw state older than this makes the gate unhealthy
     "SOCKET_VERIFIER_DIR": "~/usb-geometry-verifier-20261107/usb-geometry-verifier-v1/scripts",
     "SOCKET_PORTS": [0, 1, 2, 3],  # sockets occupied at go (the verifier's port ids)
     "SOCKET_REQUIRED": False,  # True: the gate waits for the verifier's proof; False: "unknown" does not block

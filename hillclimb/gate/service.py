@@ -212,6 +212,7 @@ class Gate:
         self.core.agentic_read(time.time(), now.t, yes=res["yes"], ok=res["error"] is None)
         self._remember({"kind": "agentic", "yes": res["yes"], "ms": res["ms"], "error": res["error"], "tools": res["tools"],
                         "asked": res["asked"], "evidence": res["evidence"], "now_t": now.t})
+        self.core.jaw_required = bool(settings.get("JAW_REQUIRED"))
         opened = self.core.try_open(time.time(), self.socket.state(), self.jaw.released_since(self.core.armed_at or 0.0), self._healthy())
         self._save()
         if opened:

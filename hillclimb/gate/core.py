@@ -64,6 +64,8 @@ class GateCore:
             self.streak, self.last_yes_now_t = self.streak + 1, now_t
         # a yes on a frame not newer by min_gap_s is not fresh evidence: keep the streak, don't count it
 
+    jaw_required = False  # set from settings JAW_REQUIRED
+
     def checks(self, socket: str, jaw_released: bool, healthy: bool) -> dict:
         socket_ok = socket == "yes" or (socket == "unknown" and not self.socket_required)
         return {
@@ -82,7 +84,8 @@ class GateCore:
         if not self.armed:
             return False
         c = self.checks(socket, jaw_released, healthy)
-        if c["socket_ok"] and jaw_released and healthy and self.streak >= 2:
+        jaw_ok = jaw_released or not bool(self.jaw_required)  # advisory by default: the live right jaw's scale differs from the recordings
+        if c["socket_ok"] and jaw_ok and healthy and self.streak >= 2:
             self.open, self.latched_at = True, t
             self._note(t=t, kind="open", checks=c)
         return self.open
