@@ -15,8 +15,11 @@ def test_star_recording_destination_keeps_separate_sides_and_task(tmp_path):
     default = tmp_path / "old-dataset"
     settings = tmp_path / "star-recording.json"
     assert recording_destination(default, "right", "old task", settings) == (default, "old task")
-    settings.write_text(json.dumps({"dataset_root": str(tmp_path / "usb-c-insertion"),
-                                   "task": "Insert the USB-C cable into the USB-C port"}))
+    settings.write_text(
+        json.dumps(
+            {"dataset_root": str(tmp_path / "usb-c-insertion"), "task": "Insert the USB-C cable into the USB-C port"}
+        )
+    )
     for side in ("left", "right"):
         root, task = recording_destination(default, side, "old task", settings)
         assert root == tmp_path / "usb-c-insertion" / side

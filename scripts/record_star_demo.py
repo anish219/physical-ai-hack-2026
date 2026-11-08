@@ -38,8 +38,9 @@ def state():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=TASK)
-    parser.add_argument("--output-root", type=pathlib.Path,
-                        default=pathlib.Path.home() / "hackathon_data" / "usb-pull-demos")
+    parser.add_argument(
+        "--output-root", type=pathlib.Path, default=pathlib.Path.home() / "hackathon_data" / "usb-pull-demos"
+    )
     args = parser.parse_args()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     root = args.output_root.expanduser() / stamp
@@ -48,9 +49,14 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: done.set())
     signal.signal(signal.SIGTERM, lambda *_: done.set())
     manifest = {
-        "task": args.task, "status": "armed", "directory": str(root),
-        "motion_file": "motion.jsonl", "motion_hz": 30, "video_hz": 20,
-        "joint_units": "radians", "gripper_units": "normalized 0 closed to 1 open",
+        "task": args.task,
+        "status": "armed",
+        "directory": str(root),
+        "motion_file": "motion.jsonl",
+        "motion_hz": 30,
+        "video_hz": 20,
+        "joint_units": "radians",
+        "gripper_units": "normalized 0 closed to 1 open",
         "cameras": ["left", "overhead", "right"],
         "note": "Camera timestamps are HTTP acquisition times; video frame indexes map to the shared monotonic clock.",
     }
@@ -70,8 +76,13 @@ def main():
         save_status()
         return
     start = time.monotonic()
-    manifest.update(status="recording", started_utc=datetime.datetime.now(datetime.UTC).isoformat(),
-                    start_monotonic=start, star_side=first["star"]["assigned_side"], initial_state=first)
+    manifest.update(
+        status="recording",
+        started_utc=datetime.datetime.now(datetime.UTC).isoformat(),
+        start_monotonic=start,
+        star_side=first["star"]["assigned_side"],
+        initial_state=first,
+    )
     save_status()
     # Use the existing recorder too, for its measured-state / action LeRobot dataset.
     started_example = not first["star"]["recording_requested"]
@@ -93,13 +104,15 @@ def main():
                         raise RuntimeError(role + " camera returned an invalid JPEG")
                     image = cv2.resize(image, (640, 360))
                     if writer is None:
-                        writer = cv2.VideoWriter(str(root / (role + ".mp4")), cv2.VideoWriter_fourcc(*"mp4v"),
-                                                 20, (640, 360))
+                        writer = cv2.VideoWriter(
+                            str(root / (role + ".mp4")), cv2.VideoWriter_fourcc(*"mp4v"), 20, (640, 360)
+                        )
                         if not writer.isOpened():
                             raise RuntimeError("Could not open " + role + " video writer")
                     writer.write(image)
-                    timeline.write(json.dumps({"frame": frames, "t": received - start,
-                                               "request_t": tick - start}) + "\n")
+                    timeline.write(
+                        json.dumps({"frame": frames, "t": received - start, "request_t": tick - start}) + "\n"
+                    )
                     timeline.flush()
                     frames += 1
                     done.wait(max(0, 0.05 - (time.monotonic() - tick)))
@@ -118,11 +131,17 @@ def main():
                         tick = time.monotonic()
                         current = state()
                         sample = {
-                            "t": time.monotonic() - start, "request_t": tick - start,
-                            "arms": {side: {key: arm.get(key) for key in
-                                      ("q", "grip", "goal", "goal_grip", "arm_open", "moving", "homing")}
-                                     for side, arm in current["arms"].items()},
-                            "star": current.get("star"), "inputs": current["inputs"],
+                            "t": time.monotonic() - start,
+                            "request_t": tick - start,
+                            "arms": {
+                                side: {
+                                    key: arm.get(key)
+                                    for key in ("q", "grip", "goal", "goal_grip", "arm_open", "moving", "homing")
+                                }
+                                for side, arm in current["arms"].items()
+                            },
+                            "star": current.get("star"),
+                            "inputs": current["inputs"],
                         }
                         motion.write(json.dumps(sample) + "\n")
                         motion.flush()
@@ -144,8 +163,11 @@ def main():
             current = state()
             if current.get("star", {}).get("recording_requested"):
                 request("/api/star/control", {"recording_requested": False})
-        manifest.update(status="saved", duration_s=time.monotonic() - start,
-                        finished_utc=datetime.datetime.now(datetime.UTC).isoformat())
+        manifest.update(
+            status="saved",
+            duration_s=time.monotonic() - start,
+            finished_utc=datetime.datetime.now(datetime.UTC).isoformat(),
+        )
         save_status()
         print("SAVED", root, flush=True)
 

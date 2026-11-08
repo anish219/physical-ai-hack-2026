@@ -1,4 +1,4 @@
-# Team handoff — November 8, 2026
+# Team handoff â€” November 8, 2026
 
 ## Open the shared controller from your own laptop
 

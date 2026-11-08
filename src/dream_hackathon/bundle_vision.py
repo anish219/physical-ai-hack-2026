@@ -43,8 +43,9 @@ class BundleVision:
     def measure(self, image):
         frame = cv2.resize(image, self.reference.shape[1::-1])
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        options = dict(winSize=(25, 25), maxLevel=3,
-                       criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 0.01))
+        options = dict(
+            winSize=(25, 25), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 0.01)
+        )
         live, found, _ = cv2.calcOpticalFlowPyrLK(self.gray, gray, self.points, None, **options)
         back, returned, _ = cv2.calcOpticalFlowPyrLK(gray, self.gray, live, None, **options)
         valid = found.ravel().astype(bool) & returned.ravel().astype(bool)
@@ -59,10 +60,16 @@ class BundleVision:
         features = np.r_[anchors.ravel(), wire]
         delta = (features - self.target).reshape(-1, 2)
         errors = np.linalg.norm(delta, axis=1)
-        report = {"strip_error_px": float(errors[:4].max()), "wire_error_px": float(errors[4]),
-                  "matched_features": int(inliers.sum()), "features": features.tolist()}
-        report["aligned"] = (report["strip_error_px"] <= self.settings["strip_tolerance_px"]
-                             and report["wire_error_px"] <= self.settings["wire_tolerance_px"])
+        report = {
+            "strip_error_px": float(errors[:4].max()),
+            "wire_error_px": float(errors[4]),
+            "matched_features": int(inliers.sum()),
+            "features": features.tolist(),
+        }
+        report["aligned"] = (
+            report["strip_error_px"] <= self.settings["strip_tolerance_px"]
+            and report["wire_error_px"] <= self.settings["wire_tolerance_px"]
+        )
         for target, actual in zip(self.target.reshape(-1, 2), features.reshape(-1, 2), strict=True):
             cv2.circle(frame, tuple(np.rint(target).astype(int)), 4, (0, 255, 0), 1)
             cv2.circle(frame, tuple(np.rint(actual).astype(int)), 3, (0, 0, 255), 1)

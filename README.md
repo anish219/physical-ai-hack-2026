@@ -175,3 +175,11 @@ Run the tests with `uv sync --group dream && uv run pytest` (no hardware needed)
 ## Credits and licenses
 
 This kit is licensed under the Apache License 2.0 (see `LICENSE`). It builds on [i2rt](https://github.com/i2rt-robotics/i2rt) (YAM SDK), [makermodslab](https://github.com/makermods-robotics/makermodslab) and [MakerMods' LeRobot fork](https://github.com/makermods-robotics/lerobot) (Metal and Maker arms, Apache-2.0), [oculus_reader](https://github.com/rail-berkeley/oculus_reader) (Quest app and reader, Apache-2.0), [mink](https://github.com/kevinzakka/mink) and [MuJoCo](https://github.com/google-deepmind/mujoco) (IK), and the [Dream library](https://pypi.org/project/dreamlabs/) (Apache-2.0). Each keeps its own license.
+
+## Live spectator and run history
+
+The [Linux run recorder](run_recorder/README.txt) combines a LiveKit scene spectator
+and Dimensional-backed camera, state, and arm-event history in one page. It runs
+in an isolated environment, reads cached camera feeds, and never sends robot
+commands. Live broadcasting works independently of recording. Judges can view
+the LAN page without SSH; the operator controls recording through localhost.

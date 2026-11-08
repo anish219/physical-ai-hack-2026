@@ -94,28 +94,29 @@ class JointModelClient:
 
     def __init__(self, client, embodiment):
         self.client, self.embodiment = client, embodiment
-        self.sides = tuple(value['side'] for value in embodiment['parts']['action'].values()
-                           if value.get('kind') == 'arm')
+        self.sides = tuple(
+            value["side"] for value in embodiment["parts"]["action"].values() if value.get("kind") == "arm"
+        )
 
     def set_observation(self, frames, state, *, timestamp):
-        selected_frames = {f'video.{key}': frames[f'video.{key}'] for key in self.embodiment['video']}
-        selected_state = {'prompt': state['prompt']}
-        selected_state.update({f'state.{key}': state[f'state.{key}'] for key in self.embodiment['state']})
+        selected_frames = {f"video.{key}": frames[f"video.{key}"] for key in self.embodiment["video"]}
+        selected_state = {"prompt": state["prompt"]}
+        selected_state.update({f"state.{key}": state[f"state.{key}"] for key in self.embodiment["state"]})
         self.client.set_observation(selected_frames, selected_state, timestamp=timestamp)
 
     def get_action(self):
-        reply = self.client.get_action()['per_key']
+        reply = self.client.get_action()["per_key"]
         result = {}
         for side in self.sides:
-            joints = np.asarray(reply[f'action.{side}_arm'], dtype=float)
-            grip = np.asarray(reply[f'action.{side}_gripper'], dtype=float).reshape(-1)
-            spec = self.embodiment['parts']['action'][f'{side}_gripper']
-            normalized = (grip - spec['closed']) / (spec['open'] - spec['closed'])
+            joints = np.asarray(reply[f"action.{side}_arm"], dtype=float)
+            grip = np.asarray(reply[f"action.{side}_gripper"], dtype=float).reshape(-1)
+            spec = self.embodiment["parts"]["action"][f"{side}_gripper"]
+            normalized = (grip - spec["closed"]) / (spec["open"] - spec["closed"])
             if joints.shape != (len(grip), 6) or not np.isfinite(joints).all():
-                raise ValueError('Joint checkpoint returned invalid joint rows')
+                raise ValueError("Joint checkpoint returned invalid joint rows")
             if not np.isfinite(normalized).all() or (normalized < 0).any() or (normalized > 1).any():
-                raise ValueError('Joint checkpoint returned invalid gripper rows')
-            result['q_l_chunk' if side == 'left' else 'q_r_chunk'] = np.column_stack([joints, normalized]).tolist()
+                raise ValueError("Joint checkpoint returned invalid gripper rows")
+            result["q_l_chunk" if side == "left" else "q_r_chunk"] = np.column_stack([joints, normalized]).tolist()
         return result
 
     def close(self):
@@ -127,14 +128,20 @@ def open_client(checkpoint: str, hz: float) -> Any:
 
     client = dream.DreamClient()
     try:
-        if checkpoint.startswith('dream-1-ft:'):
+        if checkpoint.startswith("dream-1-ft:"):
             model = next(model for model in client.get_models() if model.id == checkpoint)
             body = model.embodiment_config
-            if body and not any('eef' in key for key in body['action']):
-                client.policy({'checkpoint': checkpoint, 'embodiment': body, 'action_hz': hz})
+            if body and not any("eef" in key for key in body["action"]):
+                client.policy({"checkpoint": checkpoint, "embodiment": body, "action_hz": hz})
                 return JointModelClient(client, body)
-        client.policy({'checkpoint': checkpoint, 'embodiment': layouts.embodiment('makermods'),
-                       'ik': {'arm': 'metal', 'head': 'eef'}, 'action_hz': hz})
+        client.policy(
+            {
+                "checkpoint": checkpoint,
+                "embodiment": layouts.embodiment("makermods"),
+                "ik": {"arm": "metal", "head": "eef"},
+                "action_hz": hz,
+            }
+        )
     except Exception:
         client.close()
         raise
@@ -146,10 +153,7 @@ def available_models() -> list[dict]:
     import dream
 
     with dream.DreamClient() as client:
-        return [
-            {"id": model.id, "owner": model.owner, "servable": model.servable}
-            for model in client.get_models()
-        ]
+        return [{"id": model.id, "owner": model.owner, "servable": model.servable} for model in client.get_models()]
 
 
 class ArmCaller:

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leonard · Live & recorded runs</title>
+<style>
+:root {color-scheme:dark;font:15px system-ui,sans-serif;background:#101619;color:#e7eeec}*{box-sizing:border-box}body{max-width:1320px;margin:0 auto;padding:30px}header{display:flex;align-items:center;justify-content:space-between;gap:20px}h1{margin:0;font-size:30px;letter-spacing:-1px}h2{font-size:18px;margin:0 0 14px}p{line-height:1.5;color:#a7bbb6}.badge{color:#9eeac5;border:1px solid #356450;padding:7px 12px;border-radius:20px;font-size:12px}button,input,select{font:inherit}button,select,input[type=text]{border:1px solid #3a5049;border-radius:7px;padding:10px 13px;background:#1e2d28;color:#e7eeec}button{cursor:pointer}button.primary{background:#b5efcc;color:#12241a;border:0}button:disabled{opacity:.4;cursor:default}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:24px 0}#operator[hidden]{display:none}.layout{display:grid;grid-template-columns:270px 1fr;gap:20px}.panel{background:#182220;border:1px solid #2a3e36;border-radius:12px;padding:20px}.run{display:block;width:100%;text-align:left;margin:0 0 10px;background:#14201c;line-height:1.5}.run.selected{border-color:#b5efcc}.muted,small{color:#9eb2aa}small{font-size:12px}.stats{display:flex;gap:22px;flex-wrap:wrap;margin:18px 0}.stats span{font-size:13px;color:#a8c1b6}.stats b{display:block;color:#eef9f2;font-size:23px}.cameras{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.camera{background:#0d1512;border-radius:8px;overflow:hidden}.camera img{width:100%;aspect-ratio:16/10;object-fit:contain;background:#080d0b}.camera div{padding:8px 10px}.camera a{color:#b5efcc;font-size:12px}input[type=range]{width:100%;accent-color:#b5efcc}#events{max-height:260px;overflow:auto;margin-top:12px}.event{display:block;width:100%;text-align:left;margin:6px 0;font-size:13px}.event.error{border-color:#a9504c}.error{color:#ffb3a9}pre{max-height:230px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-word}#position{font-variant-numeric:tabular-nums}.notice{padding:12px;border-left:3px solid #7ca88e;background:#1b2c23}.empty{text-align:center;padding:50px 15px;color:#9eb2aa}code{font-size:12px;overflow-wrap:anywhere}#health{font-size:13px}.replaybar{display:flex;gap:14px;align-items:center;margin:18px 0}.replaybar input{flex:1}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #c0f9d5;outline-offset:3px}[hidden]{display:none!important}@media(max-width:850px){body{padding:18px}.layout{grid-template-columns:1fr}.cameras{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}}
+</style>
+<header><div><h1>Leonard / Live &amp; recorded runs</h1><p>Watch through LiveKit. Review robot observations and arm events with dimOS.</p></div><span class="badge">LiveKit + Dimensional</span></header>
+<div class="panel"><div id="health">Connecting to recorder…</div><div id="operator" class="toolbar" hidden><input id="label" type="text" maxlength="120" value="Rehearsal" aria-label="Run name"><button class="primary" id="start">Start recording</button><button id="stop" disabled>Stop &amp; save</button></div><p id="mode" class="muted"></p><small>Samples existing JPEGs at ≤1 fps per camera and telemetry at 0.5 Hz. Background dimOS writes use a bounded queue. Missing feeds remain visibly missing.</small><p id="error" class="error" role="alert"></p></div>
+
+<section class="panel" style="margin-bottom:22px"><header><div><h2>LiveKit / Live spectator</h2><p id="live-status" style="margin:0">Connecting to LiveKit…</p></div><div><button id="publish" hidden>Broadcast scene</button> <button id="unpublish" hidden>End broadcast</button></div></header><div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(230px,1fr);gap:20px;margin-top:18px"><div style="background:#0b110f;border-radius:8px;min-height:160px"><video id="live-video" autoplay playsinline muted style="width:100%;max-height:340px;display:block"></video><p id="live-empty" style="padding:0 18px">Waiting for the team to broadcast a fresh scene image.</p></div><div><p id="live-track">No received video track yet.</p><p id="live-source">LiveKit shows the scene camera independently of recording. Keep this operator window open while broadcasting.</p><p id="live-error" class="error" role="alert"></p><small>Live video above · recorded timeline below</small></div></div><canvas id="relay" width="640" height="360" hidden></canvas></section><div class="toolbar"><h2 style="margin:0">Recorded runs</h2><button id="refresh">Refresh</button><span id="count" class="muted"></span></div><div class="layout"><aside class="panel"><div id="runs" class="empty">No runs yet.</div></aside><main class="panel"><h2>Dimensional / Recorded timeline</h2><div id="empty" class="empty">Select a recorded run to inspect its timeline.<br><br>A rehearsal can be shown before the match without moving the robot.</div><div id="review" hidden><h2 id="run-title"></h2><small id="run-meta"></small><div class="stats" id="stats"></div><div class="replaybar"><button id="play">Play</button><input id="scrub" type="range" min="0" max="1" value="0" step="0.1" aria-label="Recorded run time"><span id="position">0:00</span></div><div class="cameras" id="cameras"></div><h2 style="margin-top:22px">Arm events</h2><div id="events"></div><details><summary>Robot state at this time</summary><pre id="state">No state sample yet.</pre></details><details style="margin-top:15px"><summary>Recording provenance</summary><p>Images, state samples, and events are written and retrieved through the official <code>dimos.memory.blobstore.sqlite.SqliteBlobStore</code>. Playback only reads saved data.</p><code id="provenance"></code></details></div></main></div>
+<script src="/livekit-client.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let selected, run, status, playing=false, timer, cursor=0, stateKey, refreshBusy=false, renderToken=0;
+const cameras=['overhead','left_wrist','right_wrist'];
+const names={overhead:'Scene / overhead',left_wrist:'Left wrist',right_wrist:'Right wrist'};
+const fmt = t => `${Math.floor(Math.max(0,t)/60)}:${String(Math.floor(Math.max(0,t)%60)).padStart(2,'0')}`;
+async function api(url,opts){const r=await fetch(url,opts);const body=await r.json();if(!r.ok)throw Error(body.error||`HTTP ${r.status}`);return body;}
+function error(e){$('error').textContent=e.message||String(e);}
+function make(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
+function blobURL(id){return `/api/runs/${selected}/observations/${id}`;}
+function setPlaying(on){playing=on;$('play').textContent=on?'Pause':'Play';clearInterval(timer);if(on)timer=setInterval(()=>{cursor=Math.min(Number($('scrub').max),cursor+.25);$('scrub').value=cursor;renderAt();if(cursor>=Number($('scrub').max))setPlaying(false);},250);}
+async function renderAt(){
+ if(!run)return; const token=++renderToken;const at=run.started_at+cursor;$('position').textContent=fmt(cursor);
+ for(const stream of cameras){
+  const frames=run.observations.filter(o=>o.stream===stream&&o.at<=at);const frame=frames.at(-1);const box=$(stream);const img=box.querySelector('img'), note=box.querySelector('small'), link=box.querySelector('a');
+  if(frame){const age=at-frame.at;const url=blobURL(frame.id);if(img.dataset.frame!==String(frame.id)){img.src=url;img.dataset.frame=frame.id;}img.hidden=false;link.href=url;link.hidden=false;note.textContent=`${fmt(frame.at-run.started_at)} · ${age>3?'gap: last image '+Math.floor(age)+'s earlier':'saved frame'}`;}
+  else{img.hidden=true;link.hidden=true;note.textContent='No image captured at this time';}
+ }
+ const sample=run.observations.filter(o=>o.stream==='state'&&o.at<=at).at(-1);
+ if(sample&&stateKey!==`${selected}/${sample.id}`){stateKey=`${selected}/${sample.id}`;try{const body=await api(blobURL(sample.id));if(token===renderToken)$('state').textContent=JSON.stringify(body,null,2);}catch(e){error(e);}}
+ if(!sample){stateKey=null;$('state').textContent='No state sample yet.';}
+}
+async function loadRun(id,keep=false){
+ const data=await api(`/api/runs/${id}`);if(keep&&selected!==id)return;
+ if(!keep){setPlaying(false);const firstFrame=data.observations.find(o=>cameras.includes(o.stream)&&o.at>=data.started_at);cursor=firstFrame?firstFrame.at-data.started_at:0;stateKey=null;}selected=id;run=data;
+ const end=data.ended_at||data.observations.at(-1)?.at||data.started_at;
+ $('scrub').max=Math.max(1,end-data.started_at);$('scrub').value=cursor;
+ $('empty').hidden=true;$('review').hidden=false;$('run-title').textContent=data.label;
+ $('run-meta').textContent=`${new Date(data.started_at*1000).toLocaleString()} · ${data.status} · ${data.source==='match'?'automatic match recording':'manual recording'}`;
+ $('provenance').textContent=`${data.id}/run.db · ${data.recorder} · ${data.end_reason||'recording in progress'}`;
+ $('stats').replaceChildren();const frameCount=cameras.reduce((n,s)=>n+(data.counts[s]||0),0);
+ for(const [label,value] of [['Saved images',frameCount],['Arm events',data.counts.events||0],['Duration',fmt(end-data.started_at)],['Storage',`${(data.payload_bytes/1048576).toFixed(1)} MB`]]){const el=make('span',label);el.prepend(make('b',value));$('stats').append(el);}
+ if(!keep){$('cameras').replaceChildren();for(const stream of cameras){const box=make('div',undefined,'camera');box.id=stream;const img=make('img');img.alt=names[stream]+' recorded frame';img.hidden=true;const desc=make('div');desc.append(make('div',names[stream]),make('small','No captured frame'));const link=make('a','Open saved image');link.target='_blank';link.rel='noopener';link.hidden=true;desc.append(make('br'),link);box.append(img,desc);$('cameras').append(box);}}
+ $('events').replaceChildren();const events=data.observations.filter(o=>o.stream==='events');if(!events.length)$('events').append(make('p','No arm-stage changes recorded in this run.'));
+ for(const event of events){const b=make('button',`${fmt(event.at-data.started_at)} · ${event.title} · ${event.state||''}${event.detail?' — '+event.detail:''}`,'event'+(event.state==='error'?' error':''));b.onclick=()=>{setPlaying(false);cursor=Math.max(0,event.at-data.started_at);$('scrub').value=cursor;renderAt();};$('events').append(b);}
+ await renderAt();document.querySelectorAll('.run').forEach(el=>el.classList.toggle('selected',el.dataset.id===id));
+}
+async function refresh(){
+ if(refreshBusy)return;refreshBusy=true;
+ try{status=await api('/api/status');const a=status.active;const age=status.last_controller_seen?Date.now()/1000-status.last_controller_seen:null;
+ $('health').textContent=`${a?'● Recording: '+a.label:'○ Ready'} · controller ${age===null?'unavailable':age<8?'connected':'last seen '+Math.floor(age)+'s ago'} · queue ${status.queue_depth}/${status.limits.queue_items} · ${status.metrics.dropped} dropped · ${status.metrics.fetch_errors} feed misses`;
+ $('operator').hidden=!status.can_control;$('publish').hidden=!status.can_control||!!publisherRoom;$('unpublish').hidden=!publisherRoom;$('start').disabled=!!a;$('stop').disabled=!a;
+ $('mode').textContent=status.can_control?'Operator view. New matches record automatically; use Start recording for rehearsals.':'Read-only judge view. Recording is controlled by the team; playback never sends robot commands.';
+ if(status.error)$('error').textContent=status.error;
+ const list=await api('/api/runs');if(!status.error)$('error').textContent='';$('count').textContent=`${list.length} saved session${list.length===1?'':'s'}`;$('runs').classList.remove('empty');$('runs').replaceChildren();
+ if(!list.length)$('runs').append(make('p','No recordings yet. Start a rehearsal from the operator view.'));
+ for(const item of list){const b=make('button',undefined,'run'+(item.id===selected?' selected':''));b.dataset.id=item.id;b.append(make('strong',item.label),make('br'),make('small',new Date(item.started_at*1000).toLocaleString()),make('br'),make('small',`${item.status} · ${Object.values(item.counts).reduce((a,b)=>a+b,0)} samples`));b.onclick=()=>loadRun(item.id).catch(error);$('runs').append(b);}
+ if(!selected&&list.length)await loadRun(list[0].id);else if(selected&&list.some(x=>x.id===selected&&x.status==='recording'))await loadRun(selected,true);else if(selected&&run?.status==='recording')await loadRun(selected,true);
+ }catch(e){error(e);}finally{refreshBusy=false;}
+}
+$('start').onclick=async()=>{try{$('start').disabled=true;$('error').textContent='';const result=await api('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:$('label').value})});await loadRun(result.id);await refresh();}catch(e){error(e);$('start').disabled=false;}};
+$('stop').onclick=async()=>{try{$('stop').disabled=true;await api('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(selected)await loadRun(selected,true);await refresh();}catch(e){error(e);}};
+$('scrub').oninput=()=>{setPlaying(false);cursor=Number($('scrub').value);renderAt();};$('play').onclick=()=>{if(!playing&&cursor>=Number($('scrub').max))cursor=0;setPlaying(!playing);};$('refresh').onclick=refresh;
+let viewerRoom, publisherRoom, publisherTrack, relayTimer, relayBusy=false, frameNumber=0;
+async function connectViewer(){
+ try{
+  const cfg=await api('/api/livekit/token');
+  viewerRoom=new LivekitClient.Room({adaptiveStream:false,dynacast:false});
+  viewerRoom.on(LivekitClient.RoomEvent.ConnectionStateChanged,state=>{$('live-status').textContent='Spectator · '+state;});
+  viewerRoom.on(LivekitClient.RoomEvent.TrackSubscribed,(track,pub,participant)=>{
+   if(track.kind!==LivekitClient.Track.Kind.Video)return;track.attach($('live-video'));$('live-empty').hidden=true;
+   $('live-track').textContent=`Receiving ${pub.trackSid} from ${participant.identity}`;
+   $('live-video').play().catch(()=>{});
+  });
+  viewerRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed,track=>{if(track.kind!==LivekitClient.Track.Kind.Video)return;track.detach($('live-video'));$('live-video').srcObject=null;$('live-empty').hidden=false;$('live-track').textContent='Broadcast ended; recordings remain below.';});
+  await viewerRoom.connect(cfg.url,cfg.token);
+ }catch(e){$('live-status').textContent='LiveKit unavailable';$('live-error').textContent=e.message;}
+}
+async function drawScene(){
+ if(relayBusy)return false;relayBusy=true;
+ try{
+  const response=await fetch('/api/live/overhead.jpg');if(!response.ok)throw Error('Waiting for a fresh scene image from the existing camera feed. Recording is optional.');
+  const bitmap=await createImageBitmap(await response.blob());const canvas=$('relay'),ctx=canvas.getContext('2d');
+  ctx.fillStyle='#101619';ctx.fillRect(0,0,640,360);const scale=Math.min(640/bitmap.width,330/bitmap.height);const w=bitmap.width*scale,h=bitmap.height*scale;ctx.drawImage(bitmap,(640-w)/2,(330-h)/2,w,h);bitmap.close();
+  ctx.fillStyle='#c4f5d3';ctx.font='13px monospace';ctx.fillText('Live scene · '+new Date().toLocaleTimeString(),12,349);
+  $('live-source').textContent=`Broadcasting scene samples through LiveKit · ${++frameNumber} frames sent from this browser.`;
+  $('live-error').textContent='';return true;
+ }catch(e){const ctx=$('relay').getContext('2d');ctx.fillStyle='#101619';ctx.fillRect(0,0,640,360);ctx.fillStyle='#e7eeec';ctx.font='20px system-ui';ctx.fillText('Scene feed unavailable',24,175);$('live-error').textContent=e.message;return false;}
+ finally{relayBusy=false;}
+}
+$('publish').onclick=async()=>{
+ $('publish').disabled=true;
+ try{
+  let ready=false;
+  for(let attempt=0;attempt<4;attempt++){
+   if(await drawScene()){ready=true;break;}
+   await new Promise(resolve=>setTimeout(resolve,600));
+  }
+  if(!ready)return;
+  if(!viewerRoom||viewerRoom.state!==LivekitClient.ConnectionState.Connected)await connectViewer();
+  const cfg=await api('/api/livekit/token?role=publisher');publisherRoom=new LivekitClient.Room();await publisherRoom.connect(cfg.url,cfg.token);
+  publisherTrack=$('relay').captureStream(1).getVideoTracks()[0];
+  await publisherRoom.localParticipant.publishTrack(publisherTrack,{name:'robot-scene-1fps',videoCodec:'vp8',simulcast:false,videoEncoding:{maxBitrate:180000,maxFramerate:1}});
+  relayTimer=setInterval(drawScene,1000);$('publish').hidden=true;$('unpublish').hidden=false;
+ }catch(e){$('live-error').textContent=e.message;await stopBroadcast();}
+ finally{$('publish').disabled=false;}
+};
+async function stopBroadcast(){clearInterval(relayTimer);if(publisherRoom)await publisherRoom.disconnect();if(publisherTrack)publisherTrack.stop();publisherRoom=null;publisherTrack=null;$('publish').hidden=!status?.can_control;$('unpublish').hidden=true;}
+$('unpublish').onclick=stopBroadcast;
+connectViewer();refresh();setInterval(refresh,5000);
+</script></html>

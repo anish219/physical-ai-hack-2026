@@ -65,9 +65,7 @@ class DemoMaster:
                 },
             }
 
-    def complete(
-        self, side: str, token: str, deterministic: bool, vlm: str, evidence: dict
-    ) -> bool:
+    def complete(self, side: str, token: str, deterministic: bool, vlm: str, evidence: dict) -> bool:
         """Evidence carries frame/measurement references for local audit.
 
         USB final step additionally requires independently measured and visually
@@ -96,8 +94,12 @@ class DemoMaster:
                 height = evidence.get("height_inches")
                 duration = evidence.get("continuous_freestanding_s")
                 if not (
-                    type(height) in (float, int) and math.isfinite(height) and height >= 4
-                    and type(duration) in (float, int) and math.isfinite(duration) and duration >= 3
+                    type(height) in (float, int)
+                    and math.isfinite(height)
+                    and height >= 4
+                    and type(duration) in (float, int)
+                    and math.isfinite(duration)
+                    and duration >= 3
                     and evidence.get("visual_freestanding") is True
                     and evidence.get("visual_height_at_least_4") is True
                 ):

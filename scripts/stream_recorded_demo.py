@@ -24,7 +24,8 @@ def stream(plan, targets, *, speed=1.0):
         if remaining > 0:
             time.sleep(remaining)
         request = urllib.request.Request(
-            plan["target_url"], data=json.dumps({"q": row["q"], "grip": row["grip"]}).encode(),
+            plan["target_url"],
+            data=json.dumps({"q": row["q"], "grip": row["grip"]}).encode(),
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -38,9 +39,20 @@ def main():
     parser.add_argument("--speed", type=float, default=1.0)
     args = parser.parse_args()
     plan, targets = load(args.plan)
-    print(json.dumps({"mode": "execute" if args.execute else "inspect only", "task": plan["task"],
-                      "side": plan["side"], "targets": len(targets), "duration_s": targets[-1]["t"],
-                      "speed": args.speed}, indent=2), flush=True)
+    print(
+        json.dumps(
+            {
+                "mode": "execute" if args.execute else "inspect only",
+                "task": plan["task"],
+                "side": plan["side"],
+                "targets": len(targets),
+                "duration_s": targets[-1]["t"],
+                "speed": args.speed,
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
     if args.execute:
         stream(plan, targets, speed=args.speed)
 

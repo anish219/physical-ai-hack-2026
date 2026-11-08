@@ -15,7 +15,6 @@ import threading
 import time
 import uuid
 
-
 MONITOR_TYPES = ("none", "prompt", "script")
 
 
@@ -157,7 +156,13 @@ class MonitorRegistry:
     def _normalize(self, result):
         if isinstance(result, str):
             result = {"result": result}
-        if not isinstance(result, dict) or result.get("result") not in ("yes", "no", "uncertain", "skipped", "unwired"):
+        if not isinstance(result, dict) or result.get("result") not in (
+            "yes",
+            "no",
+            "uncertain",
+            "skipped",
+            "unwired",
+        ):
             raise ValueError("Monitors must return yes, no, uncertain, skipped, or unwired")
         return dict(result)
 
@@ -343,9 +348,7 @@ class SequenceManager:
                 {side: validate_definition(value, scripts=self.monitors.pointers()) for side, value in saved.items()}
             )
         self.revisions = dict.fromkeys(self.definitions, 0)
-        self.runs = {
-            side: SequenceRun(side, callers[side], nodes, self.changed, self.monitors) for side in callers
-        }
+        self.runs = {side: SequenceRun(side, callers[side], nodes, self.changed, self.monitors) for side in callers}
 
     def snapshot(self):
         with self.lock:

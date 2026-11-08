@@ -26,9 +26,11 @@ class HttpArm:
         return np.asarray(state["q"], float), float(state["grip"])
 
     def command(self, q, grip):
-        request = urllib.request.Request(self.base + "/target",
-                                         data=json.dumps({"q": np.asarray(q).tolist(), "grip": float(grip)}).encode(),
-                                         headers={"Content-Type": "application/json"})
+        request = urllib.request.Request(
+            self.base + "/target",
+            data=json.dumps({"q": np.asarray(q).tolist(), "grip": float(grip)}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(request, timeout=10) as response:
             response.read()
 
@@ -77,8 +79,14 @@ def play(arm, rows, hz=30, clock=time.monotonic, sleep=time.sleep):
 def move_to(arm, q, grip, speed, hz=30, settle=0, sleep=time.sleep):
     start_q, start_grip = arm.state()
     duration = max(float(np.max(np.abs(q - start_q))) / speed, abs(grip - start_grip) / 1.5)
-    play(arm, [{"t": 0, "q": start_q.tolist(), "grip": start_grip},
-               {"t": duration, "q": np.asarray(q).tolist(), "grip": grip}], hz=hz)
+    play(
+        arm,
+        [
+            {"t": 0, "q": start_q.tolist(), "grip": start_grip},
+            {"t": duration, "q": np.asarray(q).tolist(), "grip": grip},
+        ],
+        hz=hz,
+    )
     sleep(settle)
 
 
@@ -155,11 +163,15 @@ def shortcut(rows, corrected_end, plan):
     transfer = [row for row in rows if row["segment"] == "planned direct transfer"]
     release = [row for row in rows if row["segment"] == "planned release at recorded pose"]
     end = transfer[-1]
-    duration = max(plan["direct_transfer_duration_s"],
-                   float(np.max(np.abs(np.asarray(end["q"]) - corrected_end["q"])))
-                   / plan["initial_approach_max_joint_speed_rad_s"])
-    result = [{"t": 0, "q": corrected_end["q"], "grip": corrected_end["grip"]},
-              {"t": duration, "q": end["q"], "grip": corrected_end["grip"]}]
+    duration = max(
+        plan["direct_transfer_duration_s"],
+        float(np.max(np.abs(np.asarray(end["q"]) - corrected_end["q"])))
+        / plan["initial_approach_max_joint_speed_rad_s"],
+    )
+    result = [
+        {"t": 0, "q": corrected_end["q"], "grip": corrected_end["grip"]},
+        {"t": duration, "q": end["q"], "grip": corrected_end["grip"]},
+    ]
     for row in release:
         result.append({"t": duration + row["t"] - end["t"], "q": row["q"], "grip": row["grip"]})
     return result
@@ -223,6 +235,7 @@ def main():
     plan, rows, vision = load_plan(args.plan)
     args.output.mkdir(parents=True, exist_ok=True)
     with (args.output / "events.jsonl").open("w", encoding="utf-8") as events:
+
         def report(phase, status, image):
             record = {"phase": phase, "time": time.time(), **status}
             print(json.dumps(record), flush=True)
@@ -242,10 +255,17 @@ def main():
             run(HttpArm(args.server or plan["server"]), rows, plan, vision, kinematics, report)
         else:
             _, status, overlay = vision.measure(vision.reference)
-            report("inspect", {"targets": len(rows), "aim_time_s": plan["aim_time_s"],
-                               "recorded_pull_end_s": plan["retained_source_range_s"][1]
-                               - plan["retained_source_range_s"][0],
-                               "source": plan["source_directory"], "reference": status}, overlay)
+            report(
+                "inspect",
+                {
+                    "targets": len(rows),
+                    "aim_time_s": plan["aim_time_s"],
+                    "recorded_pull_end_s": plan["retained_source_range_s"][1] - plan["retained_source_range_s"][0],
+                    "source": plan["source_directory"],
+                    "reference": status,
+                },
+                overlay,
+            )
 
 
 if __name__ == "__main__":
