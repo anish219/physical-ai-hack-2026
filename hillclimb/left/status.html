@@ -17,6 +17,7 @@
   .banner .sub { display:block; font-size:13px; font-weight:400; color:var(--dim); margin-top:4px; }
   .banner.wait { border-color:var(--warn); } .banner.go { border-color:var(--ok); } .banner.bad { border-color:var(--bad); } .banner.idle { border-color:var(--off); }
   .banner.bypass { border-color:var(--bad); background:#2a1414; }
+  .banner.bad .sub { color:#fff; opacity:.85; }
   .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 16px 0; }
   button { font:600 13px -apple-system, system-ui, sans-serif; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#222733; color:var(--text); cursor:pointer; }
   button:hover { border-color:var(--accent); }
@@ -185,6 +186,8 @@ async function tick(){
   else if (G.open) gh = `OPEN since ${hhmmss(G.latched_at)}: a cable was confirmed unplugged and resting on the table. Left may stack.`;
   else if (!G.armed) gh = "Not armed: press Start (or Restart). Start takes the reference photo of the hub.";
   else gh = "SHUT: waiting for the right arm to unplug a cable and leave it resting on the table.";
+  if (G.armed && !bypass) gh += ` Reference: ${G.ref_source || "photo at Start"}.`;
+  if (G.ref_warning && !bypass) gh += ` WARNING: ${G.ref_warning}`;
   $("gate_head").textContent = gh;
   // banner
   let b = "", sub = "", cls = "idle";
@@ -192,10 +195,11 @@ async function tick(){
   const nReads = (G.last_reads || []).length;
   if (L.state === "IDLE") { b = "IDLE: press Start"; }
   else if (L.state === "END") { b = "STOPPED"; sub = L.reason || ""; }
-  else if (L.state === "FAULT") { b = "FAULT: " + (L.reason || "").slice(0,160); cls = "bad"; sub = "it holds, then tries to recover"; }
+  else if (L.state === "FAULT") { b = "FAULT: " + (L.reason || "").slice(0,160); cls = "bad"; sub = /ARM IS OFF|NOT ANSWERING/.test(L.reason||"") ? "waiting for the left arm; nothing moves until it is back" : "it holds, then tries to recover"; }
+  else if (L.state === "LOCKED" && /ARM IS OFF|NOT ANSWERING/.test(L.reason||"")) { b = L.reason; cls = "bad"; sub = "the round waits; it plans and stacks once the left arm is powered on"; }
   else if (L.state === "LOCKED") {
     if (bypass) { b = "GATE BYPASSED (practice): planning, then stacking"; cls = "bypass"; }
-    else if (!G.armed) { b = "WAITING: the USB gate is not armed"; sub = "press Restart so the gate takes its reference photo"; cls = "wait"; }
+    else if (!G.armed) { b = "WAITING: the USB gate is not armed"; sub = "it retries every 2 s; the overhead camera is not answering on either arm server"; cls = "wait"; }
     else { b = "WAITING FOR USB: the right arm has not unplugged and laid a cable on the table yet"; cls = "wait";
       sub = `left is planning only, it will not touch blocks. ${nReads} recent reads; last ${lastRead ? ago(lastRead.t) + ": " + verdictText(lastRead) : "none yet"}`; }
   }

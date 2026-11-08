@@ -102,7 +102,36 @@ def timeline(n: int = 15) -> list[dict]:
     return [{"t": t, "text": text} for t, text in rows[:n]]
 
 
+def _arm_gate() -> dict:
+    g = gate_module()
+    try:
+        return g.http_handler("POST", "/gate/arm", {})[1] if g is not None else {"ok": False, "error": "gate unavailable"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": repr(e)[:200]}
+
+
+_CTL: LeftController | None = None
+
+
+def _rearm_until_armed(go_wall) -> None:
+    """Retries /gate/arm every 2 s while the same round is still LOCKED (waiting) and its gate is unarmed."""
+    t_end = time.time() + 300
+    while time.time() < t_end:
+        time.sleep(2.0)
+        ctl = _CTL
+        if ctl is None or ctl.go_wall != go_wall or ctl.state != "LOCKED":
+            return
+        if (ctl.gate_cache or {}).get("armed"):
+            return
+        r = _arm_gate()
+        if r.get("ok"):
+            ctl.log.write("gate_rearmed", ref_source=r.get("ref_source"), ref_warning=r.get("ref_warning"))
+            return
+
+
 def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
+    global _CTL
+    _CTL = ctl
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -139,11 +168,11 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
             ok, why = ctl.go()
             gate = None
             if ok and not (body or {}).get("keep_gate"):  # one Go: the gate takes its reference and resets its latch
-                g = gate_module()
-                try:
-                    gate = g.http_handler("POST", "/gate/arm", {})[1] if g is not None else {"error": "gate unavailable"}
-                except Exception as e:  # noqa: BLE001
-                    gate = {"error": repr(e)[:200]}
+                gate = _arm_gate()
+                if not (gate or {}).get("ok"):  # no fresh overhead frame yet: keep trying while this round waits
+                    go_wall = ctl.go_wall
+                    threading.Thread(target=_rearm_until_armed, args=(go_wall,), name="gate-rearm", daemon=True).start()
+                    gate = {**(gate or {}), "retrying": True}
             return ok, why, gate
 
         def do_GET(self):  # noqa: N802

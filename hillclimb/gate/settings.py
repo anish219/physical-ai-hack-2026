@@ -28,6 +28,9 @@ DEFAULTS = {
     "GATE_FRAME_MAX_AGE_S": 2.0,  # older overhead frames are stale (when the station clock is shared)
     "GATE_FRAME_POLL_S": 0.25,
     "GATE_BUFFER_S": 8.0,  # how much overhead history the agentic tools can ask for
+    "HISTORY_EVERY_S": 2.0,  # one overhead frame every this many seconds kept for a late-start reference
+    "HISTORY_S": 900.0,  # how long that slow history goes back (memory and LOG_DIR/overhead_history)
+    "LATE_MAX_S": 330.0,  # a right run that began at most this long (a 5 min match + 30 s) before our arm is this round's run
     # right jaw, normalized grip from the arm server's /state (0 closed, 1 open); 0.04 to 0.06 is a USB plug in the jaw
     "JAW_HOLD_LO": 0.03,
     "JAW_HOLD_HI": 0.085,
@@ -91,6 +94,18 @@ def set_override(name: str, value) -> None:
 def clear_overrides() -> None:
     with _lock:
         _overrides.clear()
+
+
+def overhead_urls() -> list[str]:
+    """The configured overhead source first, then the other arm server (both serve the same station camera, but an
+    arm server whose arm is closed serves no camera)."""
+    first = overhead_url()
+    out = [first]
+    for base in (get("LEFT_URL"), get("RIGHT_URL")):
+        u = str(base).rstrip("/") + "/overhead.jpg"
+        if u not in out:
+            out.append(u)
+    return out
 
 
 def overhead_url() -> str:

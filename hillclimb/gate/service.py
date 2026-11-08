@@ -30,6 +30,8 @@ class Gate:
         self.core = GateCore(min_gap_s=float(settings.get("AGENTIC_MIN_GAP_S")), socket_required=bool(settings.get("SOCKET_REQUIRED")))
         self.ref_jpeg: bytes | None = None
         self.ref_t: float | None = None
+        self.ref_source: str | None = None
+        self.ref_warning: str | None = None
         self.strip_box = list(settings.get("STRIP_BOX"))
         self.last_reads: list[dict] = []
         self.last_fast_answer: dict | None = None
@@ -57,6 +59,7 @@ class Gate:
             with self._lock:
                 data = {"armed": self.core.armed, "armed_at": self.core.armed_at, "open": self.core.open,
                         "latched_at": self.core.latched_at, "strip_box": self.strip_box, "ref_t": self.ref_t,
+                        "ref_source": self.ref_source, "ref_warning": self.ref_warning,
                         "jaw_releases": list(self.jaw.tracker.releases), "saved_at": time.time()}
             tmp = self._state_path().with_suffix(".tmp")
             tmp.write_text(json.dumps(data))
@@ -78,6 +81,7 @@ class Gate:
                 self.core.open, self.core.latched_at = bool(data.get("open")), data.get("latched_at")
                 self.strip_box = imaging.clamp_box(data.get("strip_box") or self.strip_box)
                 self.ref_jpeg, self.ref_t = ref, data.get("ref_t")
+                self.ref_source, self.ref_warning = data.get("ref_source"), data.get("ref_warning")
             self.jaw.tracker.since = float(data["armed_at"])
             self.jaw.tracker.releases = [float(r) for r in data.get("jaw_releases") or []]
             log.event("gate_restored", open=self.core.open, armed_at=self.core.armed_at, have_ref=ref is not None)
@@ -97,8 +101,12 @@ class Gate:
         f = self.source.latest()
         if f is None or not self.source.fresh():
             return {"ok": False, "why": "no fresh overhead frame for the reference; gate stays shut"}
+        late, note, warn = self._late_reference(time.time())
+        if late is not None:
+            f = late
         with self._lock:
             self.ref_jpeg, self.ref_t = f.jpeg, f.t
+            self.ref_source, self.ref_warning = note, warn
             self.core.arm(time.time())
             self.last_reads, self.last_fast_answer, self.last_agentic = [], None, None
         self.jaw.reset(time.time())
@@ -108,9 +116,29 @@ class Gate:
         except Exception as e:  # noqa: BLE001
             log.event("gate_ref_save_failed", error=f"{type(e).__name__}: {e}")
         self._save()
-        log.event("gate_armed", ref_t=f.t, strip_box=self.strip_box)
+        log.event("gate_armed", ref_t=f.t, strip_box=self.strip_box, ref_source=note, ref_warning=warn)
         self.start()
-        return {"ok": True, "ref_t": f.t, "strip_box": self.strip_box}
+        return {"ok": True, "ref_t": f.t, "strip_box": self.strip_box, "ref_source": note, "ref_warning": warn}
+
+    def _late_reference(self, now: float):
+        """A late start: when the right worker's run for this round began before our arm, the reference is the
+        overhead photo from just before it began (every cable still in), so an unplug the right arm already made
+        still counts. Returns (frame or None, plain note, warning or None)."""
+        try:
+            from hillclimb.common import relay as R
+            run = R.right_run()
+            start = R.run_window(run)[0] if run is not None else None
+        except Exception as e:  # noqa: BLE001
+            return None, "photo at Start", f"could not read the right run: {type(e).__name__}"
+        if start is None or not (now - float(settings.get("LATE_MAX_S")) <= start <= now - 1.0):
+            return None, "photo at Start (right run not started yet, or from an earlier match)", None
+        ago = now - start
+        before = getattr(self.source, "before", None)
+        fb = before(start - 1.0) if before else None
+        if fb is None:
+            return None, "photo at Start", (f"LATE START: the right arm began {ago:.0f} s before us and there is no photo "
+                                            "from before it; a cable it already unplugged is in the reference and will not count")
+        return fb, f"photo from {now - fb.t:.0f} s ago, just before the right arm began (late start)", None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -241,6 +269,7 @@ class Gate:
                 "checks": checks,
                 "socket": self.socket.info(),
                 "strip_box": self.strip_box,
+                "ref_t": self.ref_t, "ref_source": self.ref_source, "ref_warning": self.ref_warning,
                 "last_reads": list(self.last_reads),
                 "loop_errors": self.errors,
             }

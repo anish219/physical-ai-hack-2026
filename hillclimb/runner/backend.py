@@ -69,6 +69,38 @@ class RunnerBackend:
     def _fail(self, what, e):
         return self._note(ok=False, what=what, why=f"{type(e).__name__}: {e}"[:400], tb=traceback.format_exc()[-1200:])
 
+    def table_reset(self, why="table reset"):
+        """Records before now no longer describe the table (a new match on a reset table): world_override.json's
+        "since" moves to now, so neither the tower adoption nor the keep-out sees earlier towers. The old file is kept
+        beside it as world_override.<time>.json."""
+        ov = pathlib.Path(T.TALL) / "world_override.json"
+        ov.parent.mkdir(parents=True, exist_ok=True)
+        stamp = _wall.strftime("%Y-%m-%d %H:%M:%S")
+        if ov.exists():
+            ov.replace(ov.with_name(f"world_override.{_wall.strftime('%Y%m%d-%H%M%S')}.json"))
+        ov.write_text(json.dumps({"since": stamp, "why": why}))
+        self.tower, self.moves, self.prepared = [], [], False
+        return self._note(ok=True, what="table_reset", since=stamp, why=why)
+
+    ARM_OFF_WHY = "LEFT ARM IS OFF: its server reports no joint readings or not enabled; power it on, then press Start"
+
+    @staticmethod
+    def arm_off(st: dict | None) -> bool:
+        """True when the arm server answers but the arm itself is closed or unpowered (q null, or enabled false)."""
+        return not st or st.get("q") is None or st.get("grip") is None or st.get("enabled") is False
+
+    def _arm_off_result(self, what, T0):
+        """None while the arm is up; else a not-ok result (no motion attempted, no traceback spam)."""
+        try:
+            st = O.arm_state()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "grew": False, "verified": False, "placed_id": None, "arm_off": True,
+                    "why": f"left arm server unreachable: {type(e).__name__}: {e}"[:200], "timing": {"s": round(_wall.time() - T0, 1)}}
+        if self.arm_off(st):
+            return {"ok": False, "grew": False, "verified": False, "placed_id": None, "arm_off": True, "why": self.ARM_OFF_WHY,
+                    "timing": {"s": round(_wall.time() - T0, 1)}}
+        return None
+
     def _ensure_runner(self):
         if self.t is None:
             for p in (D.TOKEN.parent, D.LOOP, T.TALL, O.RECORDS.parent):  # a fresh station has none of the run folders
@@ -172,6 +204,9 @@ class RunnerBackend:
         ab = getattr(O, "ABORT", None)
         if ab is not None:
             ab.clear()
+        off = self._arm_off_result("prepare", _wall.time())
+        if off is not None:
+            return off
         try:
             self._ensure_runner()
             t = self.t
@@ -254,6 +289,9 @@ class RunnerBackend:
         ab = getattr(O, "ABORT", None)
         if ab is not None:
             ab.clear()
+        off = self._arm_off_result("place_next", T0)
+        if off is not None:
+            return off
         try:
             if not self.prepared:
                 r = self.prepare(scene)
@@ -335,6 +373,9 @@ class RunnerBackend:
         ab = getattr(O, "ABORT", None)
         if ab is not None:
             ab.clear()
+        off = self._arm_off_result("recover", T0)
+        if off is not None:
+            return off
         try:
             self._ensure_runner()
             self.t.recover()

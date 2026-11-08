@@ -115,6 +115,9 @@ class LeftController:
             self._gate_file(False)
             self._set("IDLE", "armed")
             self.backend = self._make_backend()
+            if new.mode == "match" and hasattr(self.backend, "table_reset"):
+                # a new match starts on a table the judges reset: towers from earlier rounds are no longer there
+                self._safe(lambda: self.backend.table_reset("match round armed"))
             self.log.write("arm", settings=dataclasses.asdict(new))
             self._save(force=True)
             return True, "armed"
@@ -265,6 +268,11 @@ class LeftController:
                 self._finish_job()
                 self._save()
                 return
+            off = self._arm_off_reason() if st in ("LOCKED", "FAULT", "RECOVER") else None
+            if off and st in ("LOCKED", "FAULT"):
+                self.reason = off  # nothing is started while the arm is off: no prepare, no recover loop hammering a dead arm
+                self._save()
+                return
             if st == "LOCKED":
                 if not self._prepared:
                     self._prepared = True
@@ -372,6 +380,14 @@ class LeftController:
         before = res.pop("_before", {})
         kind = res.get("kind")
         out = {"ok": bool(res.get("ok")), "grew": False, "tower_blocks": len(self.tower), "why": res.get("why", "")}
+        if res.get("arm_off"):  # the arm is off or unreachable: wait in FAULT (tick re-checks it), never count it as a failed step
+            self.last_step = {**res, "counted": False}
+            if kind == "prepare":
+                self._prepared = False
+            if self.state != "LOCKED":
+                self._set("FAULT", res.get("why", "left arm is off"))
+            self.log.write("step", **self.last_step)
+            return out
         if kind in ("prepare", "retreat"):
             self.last_step = {k: v for k, v in res.items()}
             if not res.get("ok", True) and res.get("raised"):
@@ -502,6 +518,22 @@ class LeftController:
         except Exception as e:  # noqa: BLE001
             self.log.write("safe_call_error", error=repr(e)[:200])
 
+    def _arm_off_reason(self) -> str | None:
+        """None while the left arm answers with joints and is enabled; else a plain reason. Cached 1 s."""
+        now = time.time()
+        if now - getattr(self, "_arm_chk_t", 0.0) < 1.0:
+            return getattr(self, "_arm_chk", None)
+        st = self.arm.state()
+        if st is None:
+            why = "LEFT ARM SERVER NOT ANSWERING (" + str(getattr(self.arm, "last_error", ""))[:80] + ")"
+        elif st.get("q") is None or st.get("enabled") is False:
+            why = "LEFT ARM IS OFF (server says enabled false, no joints): power it on; the round waits, nothing moves"
+        else:
+            why = None
+        self._arm_chk_t, self._arm_chk = now, why
+        self.health["left_arm"] = why or "ok"
+        return why
+
     def _set(self, st: str, why: str) -> None:
         if st != self.state:
             self.log.write("state", frm=self.state, to=st, why=why, tower=len(self.tower), time_left=self.time_left())
@@ -535,8 +567,9 @@ class LeftController:
                                "time_left_s": self.time_left(), "gate_open": self.gate_open(),
                                "gate_bypassed": bool(self.settings.gate_bypass and self.settings.mode == "practice"),
                                "gate_known": g.get("known"), "time": self.clock()}, default=str)
-            runs = [p for p in relay.iterdir() if p.is_dir()]
-            for d in [relay] + ([max(runs, key=lambda p: p.stat().st_mtime)] if runs else []):
+            from hillclimb.common import relay as R
+            rr = R.right_run()  # the right worker's own run (holds right-status.json), never just the newest folder
+            for d in [relay] + ([rr] if rr is not None else []):
                 tmp = d / "left-status.json.tmp"
                 tmp.write_text(body)
                 tmp.replace(d / "left-status.json")

@@ -53,7 +53,11 @@ def status() -> dict:
     if not runs:
         out["summary"] = "RIGHT: no run folder in " + str(RELAY)
         return out
-    run = max(runs, key=lambda p: p.stat().st_mtime)
+    from hillclimb.common import relay as R
+    run = R.right_run()
+    if run is None:
+        out["summary"] = "RIGHT: no right-status.json in any run folder of " + str(RELAY)
+        return out
     st = {}
     try:
         st = json.loads((run / "right-status.json").read_text())

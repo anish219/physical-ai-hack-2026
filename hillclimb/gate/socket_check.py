@@ -97,14 +97,21 @@ class SocketCheck:
         armed, with first_removal true and unplugged_count >= 1, counts as the socket proof (resting on the table is still
         checked by the overhead vision on top of it)."""
         try:
-            relay = pathlib.Path(os.environ.get("RELAY_DIR", "/tmp/relay"))
-            files = sorted(relay.glob("*/first-removal.json"), key=lambda p: p.stat().st_mtime)
-            if not files or self._armed_wall is None:
+            from hillclimb.common import relay as R
+            if self._armed_wall is None:
                 return False
-            f = files[-1]
+            run = R.right_run()
+            f = run / "first-removal.json" if run is not None else None
+            if f is None or not f.is_file():
+                return False
             d = json.loads(f.read_text())
+            # this round's right run: it started no earlier than LATE_MAX_S before our arm (a late start of ours still
+            # counts the right arm's earlier unplug), and the removal was seen after that run began
+            start, _last = R.run_window(run)
+            seen = float(d.get("observed_at") or f.stat().st_mtime)
+            floor = self._armed_wall - float(settings.get("LATE_MAX_S"))
             ok = d.get("first_removal") is True and int(d.get("unplugged_count") or 0) >= 1 \
-                and float(d.get("observed_at") or f.stat().st_mtime) >= self._armed_wall
+                and start is not None and start >= floor and seen >= start
             if ok and self.status != "yes":
                 log.event("socket_passed", proof={"source": "right worker first-removal.json", "file": str(f),
                                                   "unplugged_count": d.get("unplugged_count")})
