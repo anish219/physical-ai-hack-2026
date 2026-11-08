@@ -80,10 +80,52 @@ class RunnerBackend:
             self.t.no_perception = True
             self.t.no_vet = True
 
+    def _stacks(self):
+        """Standing stacks in the belief (blocks within 3 cm in xy), bottom first, tallest first."""
+        bel = {k: b for k, b in self.t.belief.items() if not k.startswith("pile")}
+        groups: list[list[str]] = []
+        for k in sorted(bel, key=lambda k: T.bot(bel[k])):
+            for g in groups:
+                if math.hypot(bel[k]["x"] - bel[g[0]]["x"], bel[k]["y"] - bel[g[0]]["y"]) < 0.03:
+                    g.append(k)
+                    break
+            else:
+                groups.append([k])
+        return sorted([g for g in groups if len(g) >= 2], key=len, reverse=True)
+
     def _plan(self, budget=40.0):
         t = self.t
-        left = [k for k, b in t.belief.items() if k not in self.tower and not k.startswith("pile")
-                and b.get("iou", 0) >= 0.5 and b["x"] >= 0.15]
+        stacks = self._stacks()
+        # the runner's own records of raised places (the looks read tall tops poorly): those columns are towers too
+        try:
+            rec = T.world_from_records()
+        except Exception:  # noqa: BLE001
+            rec = {}
+        cols: list[list] = []
+        for b in rec.values():
+            if (b.get("level") or 0) >= 1:
+                for c in cols:
+                    if math.hypot(b["x"] - c[0], b["y"] - c[1]) < 0.03:
+                        c[2] += 1
+                        break
+                else:
+                    cols.append([b["x"], b["y"], 1])
+        near_col = {k for k, b in t.belief.items() for c in cols if math.hypot(b["x"] - c[0], b["y"] - c[1]) < 0.03}
+        if not self.tower and (stacks or cols):  # a tower already stands (an earlier round, a restart): build on it
+            if cols:
+                c = max(cols, key=lambda c: c[2])
+                self.tower = sorted([k for k, b in t.belief.items() if math.hypot(b["x"] - c[0], b["y"] - c[1]) < 0.03],
+                                    key=lambda k: T.bot(t.belief[k]))
+                if not self.tower:
+                    raise D.Fatal(f"the records show a tower at ({c[0] * 100:.1f}, {c[1] * 100:.1f}) cm but no look finds it: "
+                                  "not building elsewhere and not taking blocks from it")
+            else:
+                self.tower = list(stacks[0])
+            self._note(ok=True, what="adopt_tower", tower=list(self.tower))
+        covered = {k for g in stacks for k in g[:-1]}  # a block with another on it is never picked
+        in_stacks = {k for g in stacks for k in g} | near_col
+        left = [k for k, b in t.belief.items() if k not in self.tower and not k.startswith("pile") and k not in covered
+                and k not in in_stacks and b.get("iou", 0) >= 0.5 and b["x"] >= 0.15]
         order = sorted(left, key=lambda k: (bool(t.belief[k].get("lying")), -T.bot(t.belief[k])))
         t.dr = {"carry_z": 0.15, "over_dz": 0.01}
         t.spot_area = ((0.19, 0.29), (-0.12, 0.15))
@@ -127,6 +169,9 @@ class RunnerBackend:
     # ---- the interface
     def prepare(self, scene=None):
         """Looks and the whole plan; no block is touched (the runner's first pick or push also waits on GATE_FILE)."""
+        ab = getattr(O, "ABORT", None)
+        if ab is not None:
+            ab.clear()
         try:
             self._ensure_runner()
             t = self.t
@@ -146,6 +191,9 @@ class RunnerBackend:
         gate = os.environ.get("GATE_FILE")
         if gate and not os.path.exists(gate):  # never touch a block before the USB gate (and never wait on it here)
             return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": "USB gate shut", "tower": list(self.tower), "timing": {"s": 0.0}}
+        ab = getattr(O, "ABORT", None)
+        if ab is not None:
+            ab.clear()
         try:
             if not self.prepared:
                 r = self.prepare(scene)
@@ -224,6 +272,9 @@ class RunnerBackend:
     def recover(self, scene=None, deadline_s=180.0):
         """Every piled or touching block apart on the table (a tumbled tower); the tower is then re-planned."""
         T0 = _wall.time()
+        ab = getattr(O, "ABORT", None)
+        if ab is not None:
+            ab.clear()
         try:
             self._ensure_runner()
             self.t.recover()
@@ -244,7 +295,10 @@ class RunnerBackend:
             return self._fail("retreat", e)
 
     def hold(self):
-        """Stop where the arm is (the arm server's own stop: it holds the current position)."""
+        """Stop where the arm is: the streaming loop aborts before its next goal (O.ABORT), then the arm server's own stop."""
+        ab = getattr(O, "ABORT", None)
+        if ab is not None:
+            ab.set()
         try:
             req = urllib.request.Request(O.URL + "/stop", b"{}", {"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=5).read()

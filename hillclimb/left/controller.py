@@ -389,10 +389,10 @@ class LeftController:
             return out
         self.faults = 0
         grew = self._confirm(res, before)
-        if grew:
-            base = [b for b in (res.get("tower") or [])[:1] if b != res.get("placed_id")]
-            if not self.tower and base:  # the backend built on a block already lying on the table: the base counts as level 1
-                self.tower.append({"id": base[0], "t": round(self.clock(), 2), "level": 1, "base": True})
+        if grew and isinstance(res.get("tower"), list) and res.get("verified"):
+            # the scripted backend keeps the tower bottom first (a base already on the table, an adopted tower): that list is the count
+            self.tower = [{"id": b, "t": round(self.clock(), 2), "level": i + 1} for i, b in enumerate(res["tower"])]
+        elif grew:
             self.tower.append({"id": res.get("placed_id"), "t": round(self.clock(), 2), "level": len(self.tower) + 1})
             self._set("SETTLE_CHECK", "placed")
             self._settle_and_latch()

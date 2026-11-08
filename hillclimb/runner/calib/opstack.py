@@ -33,6 +33,7 @@ import math
 import os
 import pathlib
 import sys
+import threading
 import time
 import urllib.request
 
@@ -265,10 +266,12 @@ class Op:
         rate = float(min(rate, MAX_RATE))
         cmd = (q_target if raw else self.sag.command(q_target)) - self.dq
         body = {"q": [float(v) for v in cmd], "grip": float(np.clip(grip, 0, 1)), "rate": rate}
+        _abort_check(tag)
         _post("/move", body)
         t0 = time.time()
         time.sleep(0.3)
         while True:
+            _abort_check(tag)
             s = arm_state()
             if s.get("error"):
                 raise SystemExit(f"arm server error: {s['error']}")
@@ -352,6 +355,14 @@ if os.environ.get("LOOK_TIP"):  # "x,y,z,yaw": a look pose off a tall tower stan
 LOOK_SEED = np.array([0.0, -1.84, 1.76, -1.48, 0.0, 0.0])  # joints near the look pose: an IK seed that solves most of the table
 TICK = 1 / 30
 STREAM_HOOK = None  # tests: called with (tag, model joints, grip, held) for every streamed goal
+# set by the harness (backend.hold) to stop a move in progress: every streamed goal and every stepped move checks it
+ABORT = threading.Event()
+
+
+def _abort_check(tag):
+    if ABORT.is_set():
+        _post("/stop", {})
+        raise SystemExit(f"{tag}: stopped by the harness")
 
 
 def record(kind, **d):
@@ -682,7 +693,7 @@ class Plan:
         # the keep-out cylinders at plan time too, so planners (and dry runs) choose a way around a tower instead of
         # being stopped at stream time (Nov 8 12:04: a dry run passed a reach that the stream then refused)
         from hillclimb.runner.calib import keepout as KO
-        KO.check(self.op, self.nodes, "plan", opening=float(self.opening or 0.095))
+        KO.check(self.op, self.nodes, "plan", opening=float(self.opening or 0.095), hand=False)  # links only at plan time
 
 
 # the arm server walks its command toward the goal at most 0.6 rad/s (station/armserver.py MAX_RATE, the sim the
@@ -781,6 +792,7 @@ def stream(op: Op, plan: Plan, grip, watch: GateWatch, tag):
         cmd = op.sag.command(q) - op.dq
         if STREAM_HOOK is not None:
             STREAM_HOOK(nodes[i + 1][2], q, float(grip), getattr(plan, "held", None))
+        _abort_check(tag)
         if quick[i]:
             _post("/target", {"q": [float(x) for x in cmd], "grip": float(grip)})
         else:
@@ -797,6 +809,7 @@ def stream(op: Op, plan: Plan, grip, watch: GateWatch, tag):
         time.sleep(max(0.0, TICK - (time.time() - now)))
     t_stream = time.time() - t0
     while arm_state()["moving"]:
+        _abort_check(tag)
         if not watch.ok:
             _post("/stop", {})
             raise SystemExit(f"GATE during {tag}: {watch.why}: stopped")

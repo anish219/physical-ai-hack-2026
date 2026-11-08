@@ -130,14 +130,16 @@ def link_points(kin, q, opening=0.095):
     return kin._ko_names, np.vstack(pts)
 
 
-def check(op, nodes, tag, opening=0.095, active=None):
+def check(op, nodes, tag, opening=0.095, active=None, hand=True):
     """Every link along the path kept out of every tower's cylinder (grown by the margins). The hand's points are not
     checked against a tower in `active` (default ACTIVE: the tower this block works on). Raises SystemExit on a hit;
-    returns the smallest clearance (mm) or None when there is no tower."""
+    returns the smallest clearance (mm) or None when there is no tower. hand=False (plan time): the hand is not checked
+    at all, only the other links, because a plan's own target tower is not marked active until its block starts."""
     towers = load()
     if not towers or len(nodes) < 1:
         return None
     act = ACTIVE if active is None else active
+    hand_on = hand
     worst = None
     seq = [nodes[0]] + list(nodes) if len(nodes) == 1 else list(nodes)
     for (q0, _, _), (q1, _, t) in zip(seq[:-1], seq[1:]):
@@ -151,7 +153,7 @@ def check(op, nodes, tag, opening=0.095, active=None):
                 mg = np.where(hand, HAND_MARGIN, LINK_MARGIN)
                 d = np.hypot(P[:, 0] - tw["x"], P[:, 1] - tw["y"]) - tw["r"]
                 clear = np.maximum(d - mg, P[:, 2] - (tw["top"] + mg))
-                if exempt:
+                if exempt or not hand_on:
                     clear = np.where(hand, np.inf, clear)
                 i = int(np.argmin(clear))
                 if worst is None or clear[i] < worst:
