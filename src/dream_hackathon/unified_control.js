@@ -153,7 +153,7 @@ function render(state) {
   $('record-status').textContent = [state.recording ? 'Recording · ' + state.frames + ' frames' : state.saved_episodes + ' saved examples',
     state.dataset_dir, state.recording_error].filter(Boolean).join(' · ');
   renderSelections();
-  if (window.renderSequenceState) window.renderSequenceState(state.sequences);
+  if (window.renderSequenceState) window.renderSequenceState(state.sequences, state.monitor_scripts);
 }
 
 for (const side of ['left', 'right']) {

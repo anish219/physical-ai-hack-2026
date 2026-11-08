@@ -247,6 +247,7 @@ class UnifiedController:
         state["combined_input"] = self.combined_input
         state.update(self.shared_state())
         state["sequences"] = self.sequences.snapshot()
+        state["monitor_scripts"] = self.sequences.monitors.available_scripts()
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
             state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]

@@ -1,6 +1,7 @@
 """Shared sequence definitions and timed execution; fake arm/API workers only."""
 
 import copy
+import json
 import time
 from types import SimpleNamespace
 
@@ -146,6 +147,11 @@ def test_sequence_selection_and_http_save_run_stop():
     base = f"http://127.0.0.1:{page.port}"
     try:
         assert request(base, "/api/sequences/left/save", {"definition": definition()})[0] == 200
+        status, body, _ = request(base, "/api/state")
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["monitor_scripts"] == []
+        assert payload["sequences"]["left"]["definition"]["phases"][0]["steps"][0]["monitor"]["type"] == "none"
         assert request(base, "/api/sequences/left/run", {})[0] == 400
         assert request(base, "/api/arms/left/input", {"source": "sequence"})[0] == 200
         assert request(base, "/api/sequences/left/run", {})[0] == 200
@@ -193,3 +199,81 @@ def test_handoff_discards_pending_sequence_api_reply_and_never_starts_next_step(
                 caller.close()
             for arm in nodes.values():
                 arm.close()
+
+
+def test_saved_steps_gain_a_default_monitor_and_prompt_text_is_required_to_run():
+    plan = definition()
+    saved = validate_definition(plan)
+    assert saved["phases"][0]["steps"][0]["monitor"] == {"type": "none", "prompt": "", "script": ""}
+    saved["phases"][0]["steps"][0]["monitor"] = {"type": "prompt", "prompt": "   ", "script": ""}
+    with pytest.raises(ValueError, match="VLM monitor prompt"):
+        validate_definition(saved, for_run=True)
+    saved["phases"][0]["steps"][0]["monitor"]["prompt"] = "Did the USB leave the port?"
+    assert validate_definition(saved, for_run=True)["phases"][0]["steps"][0]["monitor"]["type"] == "prompt"
+
+
+def test_script_pointer_must_be_registered_to_run_but_can_be_saved_early():
+    plan = definition()
+    plan["phases"][0]["steps"][0]["monitor"] = {"type": "script", "prompt": "", "script": "usb_unplugged"}
+    saved = validate_definition(plan)
+    assert saved["phases"][0]["steps"][0]["monitor"]["script"] == "usb_unplugged"
+    with pytest.raises(ValueError, match="Unknown monitor script pointer"):
+        validate_definition(saved, for_run=True, scripts=())
+    assert validate_definition(saved, for_run=True, scripts=("usb_unplugged",))["phases"][0]["steps"][0]["monitor"]["script"] == "usb_unplugged"
+
+
+def test_registered_monitors_run_after_each_window_without_gating(tmp_path):
+    sequences, callers, _, _ = manager(tmp_path / "sequences.json")
+    seen = []
+    sequences.monitors.set_prompt_evaluator(
+        lambda prompt, context: seen.append(("prompt", prompt, context["selection"])) or "yes"
+    )
+    sequences.monitors.register_script(
+        "usb_clear",
+        lambda context: seen.append(("script", context["step"]["id"])) or {"result": "no", "detail": "still seated"},
+        label="USB clear",
+    )
+    plan = definition(wait=0)
+    plan["phases"][0]["steps"][0]["monitor"] = {"type": "prompt", "prompt": "Was the wait useful?", "script": ""}
+    plan["phases"][0]["steps"][1]["monitor"] = {"type": "script", "prompt": "", "script": "usb_clear"}
+    sequences.update("left", plan)
+    try:
+        sequences.start("left")
+        wait_for(lambda: not sequences.runs["left"].snapshot()["busy"])
+        assert sequences.runs["left"].snapshot()["state"] == "complete"
+        assert sequences.runs["left"].snapshot()["monitor_result"] == {"result": "no", "detail": "still seated"}
+        assert seen == [("prompt", "Was the wait useful?", "left"), ("script", "dream1")]
+        assert callers["left"].calls == [({"task": "do the task", "checkpoint": "test/checkpoint"}, True)]
+        assert sequences.monitors.available_scripts() == [{"pointer": "usb_clear", "label": "USB clear"}]
+    finally:
+        sequences.close()
+
+
+def test_unwired_monitors_record_unwired_and_continue():
+    sequences, callers, _, _ = manager()
+    plan = {
+        "phases": [
+            {
+                "id": "phase1",
+                "title": "First phase",
+                "steps": [
+                    {
+                        "id": "wait1",
+                        "label": "Wait",
+                        "type": "wait",
+                        "durationSeconds": 0,
+                        "monitor": {"type": "prompt", "prompt": "look", "script": ""},
+                    }
+                ],
+            }
+        ]
+    }
+    sequences.update("right", plan)
+    try:
+        sequences.start("right")
+        wait_for(lambda: not sequences.runs["right"].snapshot()["busy"])
+        assert sequences.runs["right"].snapshot()["state"] == "complete"
+        assert sequences.runs["right"].snapshot()["monitor_result"]["result"] == "unwired"
+        assert not any(caller.calls for caller in callers.values())
+    finally:
+        sequences.close()
