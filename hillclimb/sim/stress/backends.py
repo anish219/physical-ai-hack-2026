@@ -62,6 +62,8 @@ class ScriptLike:
             return off
         self._maybe_raise("prepare")
         time.sleep(self.prepare_s)
+        if ABORT.is_set():  # the real look poses stream through opstack, which checks ABORT per goal
+            return {"ok": False, "why": "prepare: stopped by the harness"}
         self._move()  # the look poses
         self.prepared = True
         return {"ok": True, "what": "prepare"}
@@ -81,8 +83,8 @@ class ScriptLike:
             if not r.get("ok"):
                 return {"ok": False, "grew": False, "why": r.get("why")}
         for _ in range(self.moves):
-            if ABORT.is_set():
-                raise SystemExit("stopped by the harness")
+            if ABORT.is_set():  # the real place_next catches this SystemExit, re-plans and returns not-ok
+                return {"ok": False, "grew": False, "verified": False, "why": "stopped by the harness", "tower": list(self.tower)}
             self._move()
             time.sleep(self.step_s / self.moves)
         self.n += 1

@@ -246,7 +246,7 @@ def t_freeze_from_recover():
     time.sleep(1.0)
     b = h["b"]
     retreats = b.count("retreat")
-    record("NOTE", "7c FREEZE reached from RECOVER: retreat issued?", f"retreat calls={retreats}; {tr.text(10)}")
+    record("NOTE", "7c FREEZE reached from RECOVER: retreat issued?", f"retreat calls={retreats}; last: " + "; ".join(f"{r[1]}({r[2][:25]})" for r in tr.rows[-4:]))
     tr.stop = True
     ctl.shutdown()
 
@@ -382,6 +382,44 @@ def t_estop_latency():
     reset_arm()
 
 
+def t_lock_held_by_arm_check():
+    """tick() calls _arm_off_reason() -> ArmClient.state() (1.5 s timeout) while holding self.lock (LOCKED/FAULT/RECOVER)."""
+    reset_arm()
+    ctl, h, gate, _ = mk()
+    ctl.start()
+    ctl.go()
+    time.sleep(1.0)
+    LEFT.mode.update(state="slow", slow_s=5.0)
+    worst = 0.0
+    for _ in range(6):
+        time.sleep(0.37)
+        t0 = time.time()
+        with ctl.lock:
+            pass
+        worst = max(worst, time.time() - t0)
+    t0 = time.time()
+    n0 = LEFT.count("POST /stop")
+    threading.Thread(target=ctl.emergency_stop, daemon=True).start()
+    wait(lambda: LEFT.count("POST /stop") > n0, 10, 0.01)
+    record("BUG" if worst > 0.5 else "OK", "10f arm-off check does HTTP under the controller lock: Stop, E-stop and /api/state wait",
+           f"worst lock wait {worst:.2f} s with a slow /state; E-stop reached /stop after {time.time() - t0:.2f} s")
+    ctl.shutdown()
+    reset_arm()
+
+
+def t_recover_counted_as_block():
+    reset_arm()
+    ctl, h, gate, _ = mk(max_goal=9, _kw={"raise_on": ("place_next",)}, fault_wait_s=0.3)
+    gate.open = True
+    ctl.start()
+    ctl.go()
+    wait(lambda: h["b"].count("recover") >= 2, 10)
+    time.sleep(0.8)
+    record("BUG" if len(ctl.tower) > 0 else "OK", "S2 a recover() result with no 'grew' key is counted as a placed block",
+           f"place_next always raised, recover calls={h['b'].count('recover')}, controller tower={len(ctl.tower)}, backend tower={len(h['b'].tower)}")
+    ctl.shutdown()
+
+
 def t_gate_read_raises():
     ctl, h, gate, _ = mk()
     gate.open = True
@@ -430,7 +468,7 @@ def t_go_after_end():
 def main():
     tests = [t_none_paths, t_bypass, t_arm_off_at_go, t_arm_off_mid_round, t_arm_server_faults, t_backend_raises_always,
              t_backend_fails_quietly, t_time_runs_out_mid_place, t_freeze_from_recover, t_resume_gate_shut, t_stage2_scripted,
-             t_estop_latency, t_gate_read_raises, t_go_after_end]
+             t_estop_latency, t_lock_held_by_arm_check, t_recover_counted_as_block, t_gate_read_raises, t_go_after_end]
     only = os.environ.get("ONLY")
     for t in tests:
         if only and only not in t.__name__:

@@ -30,12 +30,17 @@ ensure() {
     *) echo "code changed, but a round is $st: not restarting until it ends"; return 0 ;;
   esac
 }
-post() { curl -s -m 30 -XPOST $U$1 -H 'Content-Type: application/json' -d "${2:-{\}}"; echo; }
+post() {  # prints the reply; fails on any HTTP error (a refused arm or go)
+  local out code; out=$(curl -s -m 30 -w '\n%{http_code}' -XPOST $U$1 -H 'Content-Type: application/json' -d "${2:-{\}}")
+  code=${out##*$'\n'}; echo "${out%$'\n'*}"; [ "$code" = 200 ]
+}
 case "$1" in
   ensure) ensure ;;
   start) ensure || exit 1
-         post /left/arm "${2:-{\"backend\":\"scripted\",\"mode\":\"match\",\"drive\":\"auto\",\"round_s\":300,\"max_goal\":6,\"crunch_at_s\":90,\"crunch_goal\":5,\"freeze_s\":20\}}"
-         post /left/go ;;
+         st=$(curl -s -m 2 $U/api/state | field '["left"]["state"]')
+         case "$st" in IDLE|END) ;; *) echo "a round is already running ($st): not starting another; hc.sh stop first"; exit 3 ;; esac
+         post /left/arm "${2:-{\"backend\":\"scripted\",\"mode\":\"match\",\"drive\":\"auto\",\"round_s\":300,\"max_goal\":6,\"crunch_at_s\":90,\"crunch_goal\":5,\"freeze_s\":20\}}" || exit 4
+         post /left/go || exit 4 ;;
   stop) post /left/stop ;;
   status) version; echo; curl -s -m 2 $U/api/state | field '["left"]["state"]' ;;
   *) echo "usage: hc.sh ensure|start|stop|status"; exit 2 ;;

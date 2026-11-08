@@ -98,8 +98,8 @@ class LeftController:
     def arm_round(self, cfg: dict) -> tuple[bool, str]:
         """Apply settings and get ready (IDLE or after END). Refused once a match round has started."""
         with self.lock:
-            if self.go_wall is not None and self.state not in ("END", "IDLE") and self.settings.mode == "match":
-                return False, "match running: settings are locked until the round ends"
+            if self.go_wall is not None and self.state not in ("END", "IDLE"):  # any mode: re-arming mid-round would reset a moving arm
+                return False, "a round is running: stop it first (settings are locked until it ends)"
             new = dataclasses.replace(self.settings)
             for k, v in (cfg or {}).items():
                 if not hasattr(new, k):

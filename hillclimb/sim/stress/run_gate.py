@@ -144,7 +144,7 @@ def t_frozen_after_first_yes():
     wait(lambda: g.core.streak >= 1, 5)
     s1 = g.core.streak
     cams("frozen")
-    time.sleep(3.0)
+    time.sleep(5.0)  # max frame age 2 s plus one agentic wait
     record("OK" if not g.core.open and g.core.streak == 0 else "BUG", "3h camera freezes after one agentic yes: streak resets, gate shut",
            f"streak {s1} -> {g.core.streak}, open={g.core.open}")
     cams("ok")
