@@ -497,23 +497,28 @@ class UnifiedPage:
                 self.wfile.write(body)
 
             def do_GET(self):  # noqa: N802
-                if self.path == "/":
-                    self.reply(200, PAGE.encode(), "text/html; charset=utf-8")
-                elif self.path in ("/controller.js", "/sequences.js", "/orchestration.js", "/orchestration.css"):
+                path = self.path.split("?", 1)[0]
+                if path == "/":
+                    self.reply(
+                        200,
+                        pathlib.Path(__file__).with_name("unified_control.html").read_bytes(),
+                        "text/html; charset=utf-8",
+                    )
+                elif path in ("/controller.js", "/sequences.js", "/orchestration.js", "/orchestration.css"):
                     self.reply(
                         200,
                         pathlib.Path(__file__)
-                        .with_name("unified_control.js" if self.path == "/controller.js" else self.path.lstrip("/"))
+                        .with_name("unified_control.js" if path == "/controller.js" else path.lstrip("/"))
                         .read_bytes(),
-                        "text/css; charset=utf-8" if self.path.endswith(".css") else "text/javascript; charset=utf-8",
+                        "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8",
                     )
-                elif self.path == "/api/state":
+                elif path == "/api/state":
                     self.reply(200, json.dumps(controller.state()).encode())
-                elif self.path == "/api/flow-strategy":
+                elif path == "/api/flow-strategy":
                     from dream_hackathon.demo_strategy import competition_graph
 
                     self.reply(200, json.dumps(competition_graph()).encode())
-                elif self.path == "/api/models":
+                elif path == "/api/models":
                     try:
                         self.reply(200, json.dumps(controller.model_loader()).encode())
                     except Exception as error:
@@ -521,7 +526,7 @@ class UnifiedPage:
                         if not isinstance(error, subprocess.CalledProcessError):
                             message += f": {error}"
                         self.reply(502, json.dumps({"error": message}).encode())
-                elif self.path == "/api/events":
+                elif path == "/api/events":
                     listener = queue.Queue()
                     with controller.shared_lock:
                         controller.listeners.add(listener)
@@ -550,15 +555,15 @@ class UnifiedPage:
                     finally:
                         with controller.shared_lock:
                             controller.listeners.discard(listener)
-                elif self.path.startswith("/api/camera/"):
-                    role = self.path.rsplit("/", 1)[-1].split(".")[0]
+                elif path.startswith("/api/camera/"):
+                    role = path.rsplit("/", 1)[-1].split(".")[0]
                     side = "left" if role in ("left", "overhead") else "right"
                     if role == "overhead" and not controller.nodes[side].snapshot()["arm_open"]:
                         side = "right"
-                    path = "/overhead.jpg" if role == "overhead" else "/wrist.jpg"
+                    frame = "/overhead.jpg" if role == "overhead" else "/wrist.jpg"
                     try:
                         with urllib.request.urlopen(
-                            f"http://127.0.0.1:{controller.nodes[side].port}" + path, timeout=5
+                            f"http://127.0.0.1:{controller.nodes[side].port}" + frame, timeout=5
                         ) as response:
                             self.reply(200, response.read(), "image/jpeg")
                     except OSError:
