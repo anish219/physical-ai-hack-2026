@@ -118,9 +118,25 @@ def status(line):
     print(msg, flush=True)
 
 
+def recording():
+    """HILLCLIMB_RECORD=1: episodes go to the recorder (REC); anything else (the match default): no recorder calls."""
+    return __import__("os").environ.get("HILLCLIMB_RECORD", "0") == "1"
+
+
 def rec(path, **q):
+    """The recorder's API. Off (HILLCLIMB_RECORD not 1): never called; /now is this process's clock. On: a recorder
+    error is logged and the move goes on (never a failure because the recorder is down)."""
+    if not recording():
+        return {"t": time.time()} if path == "/now" else {"skipped": True}
     url = f"{REC}{path}" + (("?" + urllib.parse.urlencode(q)) if q else "")
-    return json.loads(urllib.request.urlopen(url, timeout=60).read())
+    try:
+        return json.loads(urllib.request.urlopen(url, timeout=10 if path == "/now" else 60).read())
+    except Exception as e:  # noqa: BLE001
+        try:
+            status(f"recorder {path} failed ({type(e).__name__}: {str(e)[:120]}): going on without it")
+        except Exception:  # noqa: BLE001
+            print("recorder failed:", path, e, flush=True)
+        return {"t": time.time()} if path == "/now" else {"error": f"recorder: {e}"}
 
 
 def now():
@@ -386,6 +402,8 @@ class Loop:
 
     def episode(self, t0, t1, root=None, **label):
         self.counts.setdefault(label["skill"], [0, 0])[0 if label["success"] else 1] += 1
+        if not recording():
+            return
         self.saves.put({"t0": t0 - 0.3, "t1": t1 + 0.25, "root": root,
                         "label": dict(label, session=self.dir.name, randomisation=dict(self.dr), cycle_setup=dict(self.cyc))})
 
