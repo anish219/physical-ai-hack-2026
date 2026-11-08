@@ -29,6 +29,7 @@ from hillclimb.runner.calib import data_loop as D
 from hillclimb.runner.calib import opstack as O
 from hillclimb.runner.calib import tall_tower as T
 
+AI_PLANNER = os.environ.get("PLANNER", "ai") == "ai"  # an AI picks each next move; the planner checks only that move
 TILT_LEVEL = 7  # tower height at which the next block needs the tilted grip (fingers down reaches 7)
 
 
@@ -43,6 +44,8 @@ class RunnerBackend:
         self.moves: list = []
         self.spot = None
         self.replans = 0
+        self.avoid: set[str] = set()  # blocks the AI or a failed move ruled out for this round
+        self.refusals: list[str] = []
         self.used_helpers: set[int] = set()
         self.log: list[dict] = []
         self.prepared = False
@@ -162,13 +165,11 @@ class RunnerBackend:
                 and k not in in_stacks and b.get("iou", 0) >= 0.5 and b["x"] >= 0.15]
         order = sorted(left, key=lambda k: (bool(t.belief[k].get("lying")), -T.bot(t.belief[k])))
         t.dr = {"carry_z": 0.15, "over_dz": 0.01}
-        # the tower area, biased left (+y, image-left on the overhead): the blocks refused on Nov 8 sat at y < -15 cm,
-        # toward the strip, and a base there put the tower in their routes. TOWER_Y_MIN (m) overrides the left bias.
-        t.spot_area = ((0.19, 0.29), (float(os.environ.get("TOWER_Y_MIN", "-0.03")), 0.15))
-        spot_env = os.environ.get("TOWER_SPOT") or self.tower_spot  # "x,y" in cm: the tower pinned within 1.5 cm of it
-        if spot_env:
-            sx, sy = (float(v) / 100.0 for v in str(spot_env).split(","))
-            t.spot_area = ((sx - 0.015, sx + 0.015), (sy - 0.015, sy + 0.015))
+        # the tower spot: chosen by best_sequence on its left-preference arc (30-55 deg left first, straight ahead as the
+        # fallback), the spot that plans the most blocks winning, "more left" only breaking ties. TOWER_SPOT / tower_spot
+        # ("x,y" cm) is only the first spot tried, never the only one (a pinned spot planned 0-1 blocks on Nov 8).
+        spot_env = os.environ.get("TOWER_SPOT") or self.tower_spot
+        t.spot_pin = tuple(float(v) / 100.0 for v in str(spot_env).split(",")) if spot_env else None
         res = t.best_sequence(order, tuple(self.tower), budget=budget)
         if res is None:
             raise D.Fatal(f"no tower spot plans: {dict(t.why)}")
@@ -179,6 +180,41 @@ class RunnerBackend:
         return len(self.moves)
 
     FOLDED_REST = (0.0, -1.89, 1.73, -1.47, 0.0, 0.0)  # the left arm's power-on rest (Nov 7-8 logs), joints in rad
+
+    def _unstick_start(self):
+        """A stop mid-move can leave the arm where the pose check itself fails (Nov 8 14:46: "camera rolled under" at 0%
+        of every path), so every move out is refused. When the fingertips are high (over 12 cm, clear of blocks), a joint
+        move to the folded rest first; the unfold then starts from the known-good rest."""
+        import numpy as np
+        s = D.arm_state()
+        q = s.get("q") or []
+        if len(q) < 6 or max(abs(a - b) for a, b in zip(q[1:4], self.FOLDED_REST[1:4])) < 0.30:
+            return
+        t = self.t
+        qm = np.array(q) + t.op.dq
+        ok, why = t.op.safe.check_pose(qm, 0.07)
+        if ok:
+            return
+        tip = t.op.tip(qm)[0]
+        if tip[2] < 0.03 and math.hypot(tip[0], tip[1]) > 0.15:
+            # low out on the table (a block may sit under it): straight up first, then fold (Isaiah: recover on its own)
+            s_up = dict(s)
+            up = list(q)
+            up[1] = max(up[1] - 0.25, -2.6)
+            body = {"q": [float(v) for v in up], "grip": float(s.get("goal_grip") or 0.8), "rate": 0.2}
+            req = urllib.request.Request(O.URL + "/move", json.dumps(body).encode(), {"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=3).read()
+            _wall.sleep(2.0)
+        body = {"q": [float(v) for v in self.FOLDED_REST], "grip": float(s.get("goal_grip") or 0.8), "rate": 0.3}
+        req = urllib.request.Request(O.URL + "/move", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3).read()
+        t_end = _wall.time() + 12.0
+        while _wall.time() < t_end:
+            _wall.sleep(0.3)
+            q = D.arm_state().get("q") or q
+            if max(abs(a - b) for a, b in zip(q[:4], self.FOLDED_REST[:4])) < 0.05:
+                break
+        self._note(ok=True, what="unstick", why=f"start pose failed ({why}); folded to rest from {tip[2] * 1000:.0f} mm")
 
     def _unfold_from_rest(self):
         """From the folded rest, go to the look pose first through the runner's home rules (to_pose). The arm server's
@@ -234,6 +270,7 @@ class RunnerBackend:
             held = self.set_down_held()  # a block in the jaws at the start (a stop mid-lift): set it down before anything else
             if held is not None and not held.get("ok"):
                 return self._note(ok=False, what="prepare", why=held["why"])
+            self._unstick_start()
             self._unfold_from_rest()
             # a re-look renames the blocks: the tower is found again by where it stands (this round's placement records,
             # or a standing stack), never by the old names (Nov 8 13:59: "blue#1" became another block 30 cm away)
@@ -242,7 +279,14 @@ class RunnerBackend:
             self._tower_from_records(t)
             T.do_scatter_setup(t)
             t.tower_ids = set(sum(t.scatter_list, []))
-            n = self._plan()
+            if AI_PLANNER:
+                n = 0
+                stacks = self._stacks()
+                if stacks and not self.tower:  # a tower already standing: build on it, never pick from it
+                    self.tower = list(stacks[0])
+                    self._note(ok=True, what="adopt_tower", tower=list(self.tower))
+            else:
+                n = self._plan()
             self.prepared = True
             return self._note(ok=True, what="prepare", planned_moves=n, spot=self.spot, blocks=sorted(t.belief))
         except BaseException as e:  # noqa: BLE001
@@ -377,6 +421,8 @@ class RunnerBackend:
                 r = self._place_top_tilted(T0)
                 if r.get("ok") or r.get("raised"):
                     return r
+            if AI_PLANNER:
+                return self._place_next_ai(T0, deadline_s)
             t = self.t
             while _wall.time() - T0 < deadline_s:
                 if not self.moves:
@@ -423,7 +469,153 @@ class RunnerBackend:
             r = self._fail("place_next", e)
             return {"ok": False, "grew": False, "verified": False, "placed_id": None, "why": r["why"], "tower": list(self.tower), "timing": {"s": round(_wall.time() - T0, 1)}}
 
-    def _place_top_tilted(self, T0):
+    AI_SPOTS = ((0.214, 0.180), (0.190, 0.200), (0.235, 0.140), (0.250, 0.090), (0.260, 0.040), (0.280, -0.010), (0.240, -0.060))
+
+    def _overhead_jpeg(self):
+        for base in ("http://127.0.0.1:8691", "http://127.0.0.1:8692"):
+            try:
+                with urllib.request.urlopen(base + "/overhead.jpg", timeout=1.5) as r:
+                    data = r.read()
+                if data[:2] == b"\xff\xd8":
+                    return data
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
+    def _ai_choose(self, cands, spots):
+        """Terra picks the next block (and the tower spot on the first block). Returns its JSON or None."""
+        from hillclimb.common import vision as V
+        t = self.t
+        obst = [(round(float(o[0]) * 100, 1), round(float(o[1]) * 100, 1)) for o in (t.obstacles if len(getattr(t, "obstacles", [])) else [])][:30]
+        balls = [(round(x * 100, 1), round(y * 100, 1)) for x, y in getattr(t, "balls", [])]
+        rows = []
+        for k in cands:
+            b = t.belief[k]
+            near = min([math.hypot(b["x"] * 100 - ox, b["y"] * 100 - oy) for ox, oy in obst + balls] or [99.0])
+            rows.append({"id": k, "x_cm": round(b["x"] * 100, 1), "y_cm": round(b["y"] * 100, 1), "reach_cm": round(math.hypot(b["x"], b["y"]) * 100, 1),
+                         "fit": round(float(b.get("iou", 0)), 2), "nearest_ball_or_stick_cm": round(near, 1)})
+        tower = None
+        if self.tower:
+            tb = t.belief.get(self.tower[-1], {})
+            tower = {"blocks": len(self.tower), "x_cm": round(tb.get("x", 0) * 100, 1), "y_cm": round(tb.get("y", 0) * 100, 1)}
+        prompt = (
+            "You plan a robot arm stacking foam cubes into ONE tall tower, one move at a time. Coordinates: arm frame in cm, x forward "
+            "from the left arm's base, +y to the LEFT. The arm reaches about 46 cm at table height; closer is easier.\n"
+            "RULES: never choose a block that is really a ball, stick or cable (balls of the same colour are common: a candidate "
+            "touching or within 5 cm of a ball, or with a weak fit under 0.6 that looks round in the image, must be avoided). Touching a "
+            "ball is an instant loss. Prefer blocks that are easy: close, clear of neighbours, good fit.\n"
+            f"Tower now: {json.dumps(tower)}.\n"
+            + ("" if self.tower else "Choose the tower spot too, from SPOTS (index): prefer one to the left and out of the way of the loose blocks, "
+               "at least 6 cm from every block, ball and stick.\nSPOTS: " + json.dumps([[round(x * 100, 1), round(y * 100, 1)] for x, y in spots]) + "\n")
+            + f"CANDIDATE blocks: {json.dumps(rows)}\nBalls/sticks seen (cm): {json.dumps(balls + obst)}\n"
+            + f"Already refused this round (do not pick again): {json.dumps(sorted(self.avoid))}\n"
+            + (f"Recent refusals: {json.dumps(self.refusals[-5:])}\n" if self.refusals else "")
+            + "The image is the overhead camera. Answer only JSON: {\"block\": id or null, \"spot\": index or null, "
+              "\"avoid\": [ids you believe are really a ball, stick or phantom, ONLY those; reach and planning are checked by the planner, not you], \"why\": short}")
+        ans, ms = V.call(prompt, [self._overhead_jpeg()], timeout=12.0)
+        D.status(f"ai planner ({ms / 1000:.1f} s): {json.dumps(ans)[:300] if ans else 'no answer'}")
+        return ans
+
+    def _simple_choose(self, cands):
+        """Blocks further left (+y) or further out (+x) than the base first, farthest first; then the rest, farthest first."""
+        t = self.t
+        b0 = t.belief[self.tower[0]] if self.tower and self.tower[0] in t.belief else {"x": 0.25, "y": 0.0}
+        d = lambda k: math.hypot(t.belief[k]["x"] - b0["x"], t.belief[k]["y"] - b0["y"])
+        first = [k for k in cands if t.belief[k]["y"] > b0["y"] + 0.02 or t.belief[k]["x"] > b0["x"] + 0.02]
+        rest = [k for k in cands if k not in first]
+        order = sorted(first, key=d, reverse=True) + sorted(rest, key=d, reverse=True)
+        D.status(f"simple order: {order}")
+        return {"block": order[0] if order else None, "spot": 0, "avoid": []}
+
+    def _place_next_ai(self, T0, deadline_s):
+        """One move chosen by the AI, checked by the planner (that move only), then done. A refused or failed move is
+        reported back to the AI, which picks again; no re-look and no whole-sequence re-plan."""
+        t = self.t
+        self.skip_now = set()  # refused for this placement only; back in the pool for the next one
+        for attempt in range(6):
+            if _wall.time() - T0 > deadline_s:
+                break
+            cands = [k for k, b in t.belief.items() if k not in self.tower and k not in self.avoid and k not in self.skip_now and not k.startswith("pile")
+                     and not b.get("lying") and abs(D.bot(b) - T.TABLE_Z) < 0.008 and b.get("iou", 0) >= 0.45 and b["x"] >= 0.08
+                     and math.hypot(b["x"], b["y"]) <= 0.55]
+            if not cands:
+                return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, why="nothing left that plans",
+                                  tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
+            if not self.tower and os.environ.get("PLANNER", "simple") == "simple":
+                # Isaiah's simple order (Nov 8 15:16): the orange block nearest the arm is the base where it lies
+                oranges = [k for k in cands if T.colour_of(k) == "orange"]
+                if oranges:
+                    base = min(oranges, key=lambda k: math.hypot(t.belief[k]["x"], t.belief[k]["y"]))
+                    self.tower = [base]
+                    D.status(f"simple: {base} at ({t.belief[base]['x'] * 100:.1f}, {t.belief[base]['y'] * 100:.1f}) is the tower base where it lies")
+                    continue
+            if not self.tower:
+                # the first motion stacks: a block already lying clear (6 cm from every other block, ball and stick) is
+                # the base where it is, the leftmost such block in the easy band (Isaiah, Nov 8 15:08)
+                obst = [(float(o[0]), float(o[1])) for o in (t.obstacles if len(getattr(t, "obstacles", [])) else [])] + list(getattr(t, "balls", []))
+                bases = [k for k in cands if 0.17 <= t.belief[k]["x"] <= 0.32 and abs(t.belief[k]["y"]) <= 0.22
+                         and all(math.hypot(t.belief[k]["x"] - b["x"], t.belief[k]["y"] - b["y"]) >= 0.06 for o, b in t.belief.items() if o != k)
+                         and all(math.hypot(t.belief[k]["x"] - ox, t.belief[k]["y"] - oy) >= 0.06 for ox, oy in obst)]
+                if bases:
+                    base = max(bases, key=lambda k: t.belief[k]["y"])
+                    self.tower = [base]
+                    D.status(f"ai: {base} at ({t.belief[base]['x'] * 100:.1f}, {t.belief[base]['y'] * 100:.1f}) is the tower base where it lies")
+                    continue
+            spots = []
+            if not self.tower:
+                for x, y in self.AI_SPOTS:
+                    if all(math.hypot(x - b["x"], y - b["y"]) >= 0.06 for b in t.belief.values()):
+                        spots.append((x, y))
+                spots = spots or list(self.AI_SPOTS)
+            if os.environ.get("PLANNER", "simple") == "simple":
+                ans = self._simple_choose(cands)
+            else:
+                ans = self._ai_choose(cands, spots) or {}
+            for a in ans.get("avoid") or []:
+                if a in t.belief:
+                    self.avoid.add(a)
+            bid = ans.get("block")
+            if bid not in cands or bid in self.avoid:
+                bid = min(cands, key=lambda k: math.hypot(t.belief[k]["x"] - 0.2, t.belief[k]["y"]))  # fallback: the closest
+            if self.tower:
+                s_ = t.belief[self.tower[-1]]
+                tgt = (s_["x"], s_["y"], s_["yaw"], len(self.tower), self.tower[-1])
+            else:
+                i = ans.get("spot")
+                sx, sy = spots[i] if isinstance(i, int) and 0 <= i < len(spots) else spots[0]
+                tgt = (sx, sy, math.atan2(sy, sx) if abs(math.atan2(sy, sx)) > math.radians(30) else 0.0, 0, None)
+            t1 = _wall.time()
+            ok = t.feasible(bid, tgt)
+            D.status(f"ai move {bid} -> ({tgt[0] * 100:.1f}, {tgt[1] * 100:.1f}) level {len(self.tower) + 1}: plan check {'ok' if ok else 'REFUSED: ' + str(getattr(t, 'last_refusal', ''))[:220]} in {_wall.time() - t1:.1f} s")
+            if not ok and self.tower and ("no safe pose" in str(getattr(t, "last_refusal", "")) or "no rule route" in str(getattr(t, "last_refusal", ""))):
+                # out of fingers-down reach (about 46 cm at the table): the tilted hand reaches 55-60 cm (night_top, the
+                # remote metal arm's 6-high recipe), onto the tower top
+                r = self._place_top_tilted(T0, only=[bid])
+                if r.get("ok"):
+                    return r
+                D.status(f"ai move {bid}: tilted too: {str(r.get('why'))[:160]}")
+            if not ok:
+                self.skip_now.add(bid)
+                self.refusals.append(f"{bid}: its move does not plan ({getattr(t, 'last_refusal', '')[:110]})")
+                continue
+            try:
+                t.block(bid, tgt, 1, len(self.tower) + 1, "stack")
+            except (D.NoPlan, D.NoSpot, D.CycleFail, SystemExit) as e:
+                st = O.arm_state()
+                (self.avoid if "ball" in str(e) else self.skip_now).add(bid)
+                self.refusals.append(f"{bid}: {str(e)[:120]}")
+                if st["grip"] < 0.75 and st["goal_grip"] < 0.75 and st.get("grip_holding"):
+                    return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, tower=list(self.tower),
+                                      why=f"holding a block after a failed move {bid}: {str(e)[:200]}", timing={"s": round(_wall.time() - T0, 1)})
+                t.op.st["target"] = None
+                continue
+            self.tower.append(bid)
+            return self._note(ok=True, grew=True, verified=True, what="place_next", placed_id=bid, why="ai move",
+                              tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
+        return self._note(ok=False, grew=False, verified=False, what="place_next", placed_id=None, why="no moves planned",
+                          tower=list(self.tower), timing={"s": round(_wall.time() - T0, 1)})
+
+    def _place_top_tilted(self, T0, only=None):
         """One loose block onto the tower top with the hand tilted (calib/night_top.plan_top): tilted pick, carry level
         over the top, set down, slide out, look pose. Tries the loose blocks nearest the tower first until one plans."""
         import numpy as np
@@ -441,12 +633,22 @@ class RunnerBackend:
                  and b.get("iou", 0) >= 0.5 and not k.startswith("pile")
                  and math.hypot(b["x"] - tx0, b["y"] - ty0) > 0.06]
         loose.sort(key=lambda k: math.hypot(t.belief[k]["x"] - tx0, t.belief[k]["y"] - ty0))
+        if only is not None:
+            loose = [k for k in only if k in t.belief and k not in self.tower]
         whys = []
         for bid in loose:
             try:
                 dpsi, pick, carry, out, gh, z_set, tx, ty = NT.plan_top(t, bid, s_b, top, theta, sag, quiet=True)
             except SystemExit as e:
                 whys.append(f"{bid}: {str(e)[:70]}")
+                continue
+            try:  # the close-up ball check before every pick, tilted too (never touch a ball)
+                t.to_pose(O.LOOK_TIP, "look")
+                t.ball_check(bid)
+            except (D.CycleFail, SystemExit) as e:
+                whys.append(f"{bid}: {str(e)[:70]}")
+                if "ball" in str(e):
+                    self.avoid.add(bid)
                 continue
             D.status(f"tilted top: {bid} onto the tower top ({(top - T.TABLE_Z) * 1000:.0f} mm), {math.degrees(theta):.0f} deg tilt")
             op = t.op

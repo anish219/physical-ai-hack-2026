@@ -330,6 +330,7 @@ class Tall(D.Loop):
             self.relook_far(colour)  # out of the standard look's view: from the LOOKS pose that sees it
         else:
             super().relook(colour)
+        self.ball_check(colour)
         a = self.belief[colour]
         if a.get("iou", 1.0) < 0.55 and math.hypot(a["x"] - before["x"], a["y"] - before["y"]) > 0.02:
             if before.get("placed"):
@@ -338,6 +339,39 @@ class Tall(D.Loop):
             else:
                 raise D.CycleFail(f"{colour}: re-look fit {a['iou']:.2f} is {math.hypot(a['x'] - before['x'], a['y'] - before['y']) * 1000:.0f} mm from where it was: refused")
         self.belief[colour]["t_seen"] = time.time()
+
+    def ball_check(self, colour):
+        """Never grip a ball (touching a stage 3 object is a DQ): the close re-look frame's blob of this colour at the
+        target is tested for round (Nov 8 14:59: the blue golf ball, its black stripe splitting the first look's blob,
+        was taken for a blue block; the close re-look saw it round, fill 0.83 solid 0.99, and the pick still went).
+        A round blob there: the spot is kept as an obstacle for the round and the pick is refused."""
+        b = self.belief[colour]
+        try:
+            img, q, grip, stem = self.op.snap(f"ballcheck-{colour.replace('#', '')}")
+        except Exception as e:  # noqa: BLE001
+            D.status(f"ball check {colour}: no frame ({e}); refused to be safe")
+            raise D.CycleFail(f"{colour}: ball check had no frame")
+        view = self.op.view
+        cam = view.pose(q, grip * 0.1)
+        jaws = view.jaws_mask(q, grip * 0.1)
+        m = colour_mask(img, colour_of(colour), jaws)
+        n, lab, stats, cen = cv2.connectedComponentsWithStats(m.astype(np.uint8))
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] < 300:
+                continue
+            blob = lab == i
+            ys, xs = np.nonzero(blob)
+            pts = view.ray_on_plane(cam, np.stack([xs, ys], 1)[:: max(1, len(xs) // 200)], TABLE_Z + 0.015)[:, :2]
+            cx, cy = float(np.mean(pts[:, 0])), float(np.mean(pts[:, 1]))
+            if math.hypot(cx - b["x"], cy - b["y"]) > 0.035:
+                continue
+            fill, solid = roundness(blob)
+            if fill > 0.76 and solid > 0.93:
+                self.balls = getattr(self, "balls", []) + [(cx, cy)]
+                self.obstacles = np.concatenate([self.obstacles, np.array([[cx, cy]])]) if len(getattr(self, "obstacles", [])) else np.array([[cx, cy]])
+                self.belief.pop(colour, None)
+                D.status(f"ball check {colour}: a BALL at ({cx * 100:.1f}, {cy * 100:.1f}) (fill {fill:.2f} solid {solid:.2f}): not picked, kept clear of")
+                raise D.CycleFail(f"{colour}: it is a ball (fill {fill:.2f}), never picked")
 
     def relook_far(self, colour):
         """The re-look of a block the standard look does not see (far out, close in by the base): from the first LOOKS
@@ -506,6 +540,18 @@ class Tall(D.Loop):
         upright = shape_of({"big": True, "upright": True}, TABLE_Z)  # a brick on its end (Nov 8 03:03: green tipped up)
         for c in BLOCK_COLOURS + ("red",):
             m = colour_mask(img, c, jaws)
+            # balls first, on the mask with small gaps closed: a golf ball's printed stripe splits its blob in two and
+            # neither half looks round (Nov 8 14:59: the blue ball was gripped twice as "blue#3"). Never touch a ball.
+            mc = cv2.morphologyEx(m.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)))
+            nb, labc, statsc, _ = cv2.connectedComponentsWithStats(mc)
+            ball_px = np.zeros(m.shape, bool)
+            for j in range(1, nb):
+                if statsc[j, cv2.CC_STAT_AREA] < 300:
+                    continue
+                bj = labc == j
+                fj, sj = roundness(bj)
+                if fj > 0.78 and sj > 0.93:
+                    ball_px |= bj
             n, lab, stats, cen = cv2.connectedComponentsWithStats(m)
             for i in range(1, n):
                 if stats[i, cv2.CC_STAT_AREA] < 150:
@@ -514,7 +560,7 @@ class Tall(D.Loop):
                 ys, xs = np.nonzero(blob)
                 pts = view.ray_on_plane(cam, np.stack([xs, ys], 1)[:: max(1, len(xs) // 200)], TABLE_Z + 0.015)[:, :2]
                 fill, solid = roundness(blob)
-                kind = "ball" if (fill > 0.78 and solid > 0.93) else None
+                kind = "ball" if (fill > 0.78 and solid > 0.93) or (blob & ball_px).sum() > 0.3 * blob.sum() else None
                 f = None
                 (_, _), (rw, rh), _ = cv2.minAreaRect((pts * 1000).astype(np.float32))
                 aspect = max(rw, rh) / max(min(rw, rh), 1e-3)
@@ -1186,7 +1232,7 @@ class Tall(D.Loop):
         st = top_of(self.belief[sup]) if sup else TABLE_Z
         self.dr = {"carry_z": min(max(0.15, st + D.SUP_CLEAR), max(D.REACH_Z, st + 0.035)), "over_dz": 0.01}
         self.op.st["target"] = q.tolist()
-        pl = self.plan_pick(bid, q)
+        pl = self.pick_memo(bid, q)
         lift = self.plan_lift(pl.nodes[-1][0], pl.R, math.degrees(self.belief[bid]["yaw"]), bid)
         grasp_h = 0.025 if self.belief[bid].get("lying") else 0.015
         p3 = self.plan_place(bid, lift.nodes[-1][0], lift.R, (x, y, yaw, st, sup), grasp_h)
@@ -1194,6 +1240,45 @@ class Tall(D.Loop):
             ck = Plan(self.op, p3.nodes[-1][0], 0.08)
             ck.to([x - 0.065, y, min(max(0.13, zt + 0.06), D.LOOK_MAX_Z)], math.degrees(yaw), 0.4, tag)
             ck.check(skip=bid)
+
+    def pick_memo(self, bid, q):
+        """plan_pick, with its refusals remembered while pick_dead is a dict (best_sequence sets it): a block whose pick
+        was refused is refused again at once while it lies where it did and every block that was near its route then
+        (17 cm of the line from the start fingertips to it: the motion rule's 12 cm plus 5) still stands where it did,
+        at least as high. More or taller blocks only make a pick harder. The same refused picks cost 4-6 s at every
+        level of every spot (Nov 8 replays: 37 of 53 s)."""
+        memo = getattr(self, "pick_dead", None)
+        if memo is None:
+            return self.plan_pick(bid, q)
+        b = self.belief[bid]
+        key = (bid, round(b["x"], 3), round(b["y"], 3), round(b["yaw"], 2), round(bot(b), 3), bool(b.get("lying")))
+
+        def near_route():
+            if "tip0" not in memo:
+                memo["tip0"] = np.asarray(self.op.tip(np.asarray(q))[0][:2], float)
+            p0, p1 = memo["tip0"], np.array([b["x"], b["y"]])
+            d = p1 - p0
+            out = {}
+            for k, o in self.belief.items():
+                if k == bid:
+                    continue
+                c = np.array([o["x"], o["y"]])
+                u = float(np.clip((c - p0) @ d / max(float(d @ d), 1e-9), 0.0, 1.0))
+                if np.linalg.norm(c - (p0 + u * d)) <= 0.17:
+                    out[k] = (o["x"], o["y"], top_of(o))
+            return out
+
+        if key in memo:
+            msg, then = memo[key]
+            now = near_route()
+            if all(k in now and abs(now[k][0] - v[0]) < 0.003 and abs(now[k][1] - v[1]) < 0.003 and now[k][2] >= v[2] - 0.001
+                   for k, v in then.items()):
+                raise SystemExit(msg)
+        try:
+            return self.plan_pick(bid, q)
+        except SystemExit as e:
+            memo[key] = (str(e), near_route())
+            raise
 
     def plan_tower(self, spot, order, base=()):
         """Greedy: at each level the first block (in this order) whose pick, place, close look and check photo all plan,
@@ -1400,52 +1485,215 @@ class Tall(D.Loop):
         return None
 
     def best_sequence(self, order, base=(), budget=40.0):
-        """The tower spot (a free one in the high-reach band, or a block where it lies as the base, or the standing
-        tower) whose whole sequence plans the most blocks, then the fewest clearing moves. Spots are tried nearest the
-        high-reach point first until the budget (seconds of planning) runs out."""
+        """The tower spot (the standing tower; else spot_candidates: a block where it lies as the base or a free spot on
+        the left-preference arc) whose whole sequence plans the most blocks, then the fewest clearing moves, then the
+        more preferred (further left) spot. The candidates are planned SPOT_WORKERS at a time in forked children (plans
+        only read the world), most preferred first, until the budget (seconds of planning) runs out."""
         import collections
         t_end = time.time() + budget
-        cands = []
+        self.pick_dead = {}
+        try:
+            return self._best_sequence(order, base, t_end)
+        finally:
+            self.pick_dead = None
+
+    def _best_sequence(self, order, base, t_end):
+        import collections
         if base:
             b0 = self.belief[base[0]]
-            cands.append(((b0["x"], b0["y"], b0["yaw"]), list(base), list(order)))
+            cands = [((b0["x"], b0["y"], b0["yaw"]), list(base), list(order), 0.0)]
         else:
-            (ax0, ax1), (ay0, ay1) = getattr(self, "spot_area", ((0.19, 0.29), (-0.12, 0.15)))
-            for k in order:  # a flat block on the table in the tower area, built on where it lies
-                b = self.belief[k]
-                if not b.get("lying") and abs(bot(b) - TABLE_Z) < 0.005 and ax0 - 0.01 <= b["x"] <= ax1 + 0.01 and ay0 - 0.01 <= b["y"] <= ay1 + 0.01 and self.free_top(k):
-                    cands.append(((b["x"], b["y"], b["yaw"]), [k], [o for o in order if o != k]))
-            area = D.AREA
-            D.AREA = getattr(self, "spot_area", ((0.19, 0.29), (-0.12, 0.15)))
             self.why = collections.Counter()
-            free = []
-            for x, y, yaw in self.spot(None, [0, 1, 2], avoid=[], gap=0.0):  # spots with blocks near them: cleared in the plan
-                if not any(math.hypot(x - b["x"], y - b["y"]) < 0.055 for b in self.belief.values()):
-                    free.append(((x, y, yaw), [], list(order)))
-                if len(free) >= 12:
-                    break
-            D.AREA = area
-            cands += free
-            cands.sort(key=lambda c: math.hypot(c[0][0] - (ax0 + ax1) / 2, c[0][1] - (ay0 + ay1) / 2))
+            cands = self.spot_candidates(order)
+        workers = max(1, int(os.environ.get("SPOT_WORKERS", "4")))
+        if workers > 1 and len(cands) > workers:
+            # the first batch also holds the best straight-ahead fallback: a left band that plans badly is beaten at once
+            fb = next((i for i, c in enumerate(cands) if c[3] >= 10.0), None)
+            if fb is not None and fb >= workers:
+                cands.insert(workers - 1, cands.pop(fb))
         best = None
         n_tried = 0
-        for spot, b_, o_ in cands:
+        i = 0
+        while i < len(cands):
             if time.time() > t_end and best is not None:
                 break
-            got, seq, stop = self.plan_sequence(spot, o_, b_, deadline=t_end + 20)
-            n_tried += 1
-            n = len(b_) + len(got)
-            score = (n, -sum(1 for m in seq if m[0] != "stack"))
-            if best is None or score > best[0]:
-                best = (score, spot, b_, seq, stop)
-            if n >= len(order) + len(base):
+            batch = cands[i:i + workers]
+            i += len(batch)
+            # in children every plan stops at the budget; one spot planned here may run past it (a spot must plan)
+            dl = t_end if (best is not None or len(batch) > 1) else t_end + 10
+            results = self.plan_spots(batch, dl) if len(batch) > 1 else [None]
+            if results[0] is None and all(r is None for r in results):  # one spot, or the children failed: here
+                results = [self.plan_sequence(batch[0][0], batch[0][2], batch[0][1], deadline=dl)] + [None] * (len(batch) - 1)
+            done = False
+            for (spot, b_, o_, cost), r in zip(batch, results):
+                if r is None:
+                    continue
+                got, seq, stop = r
+                seq = list(seq)
+                while seq and seq[-1][0] != "stack":  # clearing moves after the last place unblock nothing that planned
+                    seq.pop()
+                n_tried += 1
+                n = len(b_) + len(got)
+                score = (n, -sum(1 for m in seq if m[0] != "stack"), -cost)
+                if best is None or score > best[0]:
+                    best = (score, spot, b_, seq, stop)
+                done = done or (n >= len(order) + len(base) and score[1] == 0)
+            if done:
                 break
         if best is None:
             return None
-        (n, neg), spot, b_, seq, stop = best
-        D.status(f"whole sequence: {n} blocks plan at ({spot[0] * 100:.1f}, {spot[1] * 100:.1f}) on base {b_ or 'a free spot'} "
-                 f"with {-neg} clearing moves ({n_tried} spots planned); moves {[(m[0], m[1]) for m in seq]}; stop: {stop}")
+        (n, neg, _c), spot, b_, seq, stop = best
+        D.status(f"whole sequence: {n} blocks plan at ({spot[0] * 100:.1f}, {spot[1] * 100:.1f}), "
+                 f"{math.degrees(math.atan2(spot[1], spot[0])):.0f} deg left, on base {b_ or 'a free spot'} "
+                 f"with {-neg} clearing moves ({n_tried} of {len(cands)} spots planned); moves {[(m[0], m[1]) for m in seq]}; stop: {stop}")
         return spot, b_, seq, stop
+
+    def plan_spots(self, batch, deadline):
+        """plan_sequence for each (spot, base, order, cost) in its own forked child, all at once: [(got, seq, stop) or
+        None]. Each child refuses the move it is planning once the deadline passes (SIGALRM) and returns what planned; one
+        that has not answered 3 s past the deadline is killed (None). Children only plan (no motion, no
+        status lines, no files); the parent's belief is untouched."""
+        import pickle
+        import select
+        import signal
+        kids = {}
+        for j, (spot, b_, o_, _c) in enumerate(batch):
+            try:
+                r, w = os.pipe()
+                pid = os.fork()
+            except OSError:
+                break
+            if pid == 0:  # the child
+                try:
+                    os.close(r)
+                    D.status = lambda line: None
+                    stop_in = {self.plan_level.__code__, self.plan_push.__code__}  # both only ever called under except SystemExit
+
+                    def _late(signum, frame):  # past the deadline: the move being planned is refused (plan_sequence
+                        f = frame  # then stops "out of planning time"); never inside its own bookkeeping
+                        while f is not None:
+                            if f.f_code in stop_in:
+                                raise SystemExit("out of planning time")
+                            f = f.f_back
+
+                    signal.signal(signal.SIGALRM, _late)
+                    signal.setitimer(signal.ITIMER_REAL, max(0.01, deadline - time.time()), 0.05)
+                    res = self.plan_sequence(spot, o_, b_, deadline=deadline)
+                    signal.setitimer(signal.ITIMER_REAL, 0, 0)
+                    data = pickle.dumps(("ok", res))
+                except BaseException as e:  # noqa: BLE001
+                    data = pickle.dumps(("err", f"{type(e).__name__}: {e}"))
+                try:
+                    view = memoryview(data)
+                    while view:
+                        view = view[os.write(w, view):]
+                finally:
+                    os._exit(0)
+            os.close(w)
+            kids[r] = (j, pid, [])
+        out = [None] * len(batch)
+        t_kill = deadline + 3.0
+        while kids and time.time() < t_kill:
+            ready, _, _ = select.select(list(kids), [], [], max(0.05, t_kill - time.time()))
+            for r in ready:
+                chunk = os.read(r, 1 << 20)
+                if chunk:
+                    kids[r][2].append(chunk)
+                    continue
+                j, pid, parts = kids.pop(r)
+                os.close(r)
+                os.waitpid(pid, 0)
+                try:
+                    kind, val = pickle.loads(b"".join(parts))
+                    if kind == "ok":
+                        out[j] = val
+                    else:
+                        D.status(f"spot ({batch[j][0][0] * 100:.1f}, {batch[j][0][1] * 100:.1f}): plan failed: {val[:200]}")
+                except Exception as e:  # noqa: BLE001
+                    D.status(f"spot ({batch[j][0][0] * 100:.1f}, {batch[j][0][1] * 100:.1f}): no answer ({type(e).__name__})")
+        for r, (j, pid, _p) in kids.items():  # past the deadline: killed
+            try:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            os.close(r)
+            D.status(f"spot ({batch[j][0][0] * 100:.1f}, {batch[j][0][1] * 100:.1f}): killed {t_kill - deadline:.0f} s past the deadline")
+        return out
+
+    # The tower spot preference (Isaiah, Nov 8): to the LEFT (+y) of the blocks and out of their way. Measured with this
+    # planner on 4 real layouts: 40 deg left planned 7 high, 50 deg 6-7, 60 deg 4-6, 65 deg and more never (the
+    # base-plate rule refuses low links behind x 5 cm). Left band first, straight ahead as the fallback.
+    SPOT_LEFT = (30.0, 55.0, 0.22, 0.30)  # deg from, to; radius from, to (m)
+    SPOT_BEST = (42.0, 0.26)  # the most preferred point in the band
+    SPOT_MAX = 10  # spots kept (each a whole-sequence plan, about 1-3 s)
+
+    def spot_cost(self, x, y):
+        """Lower is more preferred: in the left band by the distance from SPOT_BEST; outside it 10 plus how far right
+        of the band it is (so the fallbacks are tried left first too). Each 5 deg or 2 cm is one point."""
+        az, r = math.degrees(math.atan2(y, x)), math.hypot(x, y)
+        a0, a1, r0, r1 = self.SPOT_LEFT
+        if a0 <= az <= a1 and r0 <= r <= r1:
+            return abs(az - self.SPOT_BEST[0]) / 5.0 + abs(r - self.SPOT_BEST[1]) / 0.02
+        return 10.0 + max(0.0, a0 - az) / 5.0 + max(0.0, az - a1) / 2.5 + max(0.0, r0 - r, r - r1) / 0.02
+
+    def spot_candidates(self, order):
+        """Tower spots to plan, most preferred first: [(spot (x, y, yaw), base, order, cost)]. A flat block lying in
+        the arc is a base where it lies. Free spots on the arc (deg -20 to 60, 22 to 32 cm) that no block overlaps;
+        a spot whose jaws would meet a neighbour is kept (the plan clears that neighbour first) but tried after the
+        clear ones. Kept 4 cm or more apart, at most SPOT_MAX. A pinned spot (spot_pin, m) goes first. Never empty
+        while the arc has a free spot."""
+        def yaw_at(x, y):  # the arm's own direction when turned far round (as data_loop.spot), else square to x
+            return math.atan2(y, x) if abs(math.atan2(y, x)) > math.radians(30) else 0.0
+
+        def in_arc(x, y):
+            az, r = math.degrees(math.atan2(y, x)), math.hypot(x, y)
+            return -20.0 <= az <= 60.0 and 0.20 <= r <= 0.33 and x >= 0.13
+
+        pin = getattr(self, "spot_pin", None)
+        pool = []  # (cost, spot, base, order)
+        for k in order:  # a flat block on the table in the arc, built on where it lies (one move saved)
+            b = self.belief[k]
+            if not b.get("lying") and abs(bot(b) - TABLE_Z) < 0.005 and in_arc(b["x"], b["y"]) and self.free_top(k):
+                c = self.spot_cost(b["x"], b["y"]) - 0.5
+                if pin and math.hypot(b["x"] - pin[0], b["y"] - pin[1]) < 0.03:
+                    c = -100.0
+                pool.append((c, (b["x"], b["y"], b["yaw"]), [k], [o for o in order if o != k]))
+        grid = [(az, r) for az in range(-20, 61, 5) for r in (0.22, 0.24, 0.26, 0.28, 0.30, 0.32)]
+        if pin:
+            grid.insert(0, (math.degrees(math.atan2(pin[1], pin[0])), math.hypot(*pin)))
+        for i, (az, r) in enumerate(grid):
+            x, y = r * math.cos(math.radians(az)), r * math.sin(math.radians(az))
+            if x < 0.13:
+                continue
+            if any(math.hypot(x - b["x"], y - b["y"]) < 0.055 + D.ext(b) for b in self.belief.values()):
+                self.why["a block on the spot"] += 1
+                continue
+            if len(self.obstacles) and np.min(np.hypot(self.obstacles[:, 0] - x, self.obstacles[:, 1] - y)) < D.CLEAR:
+                self.why["obstacle keep-out"] += 1
+                continue
+            y0 = yaw_at(x, y)
+            yaw = next((y0 + d for d in (0.0, math.pi / 8, -math.pi / 8, math.pi / 4) if self.finger_clear(x, y, y0 + d, None)), None)
+            c = -100.0 if (pin and i == 0) else self.spot_cost(x, y)
+            if yaw is None:
+                self.why["jaws near a neighbour (cleared in the plan)"] += 1
+                yaw, c = y0, c + 4.0
+            if self.jaws_look is not None and self.q_look is not None and not self.visible(x, y, yaw, [0, 1, 2]):
+                c += 2.0
+            pool.append((c, (x, y, yaw), [], list(order)))
+        pool.sort(key=lambda p: p[0])
+        out = []
+        for c, s, b_, o_ in pool:
+            if all(math.hypot(s[0] - q[0][0], s[1] - q[0][1]) >= 0.04 for q in out):
+                out.append((s, b_, o_, c))
+            if len(out) >= self.SPOT_MAX:
+                break
+        if not out:  # the whole arc taken: any free spot on the table (data_loop.spot over its wide area, no gap)
+            for x, y, yaw in self.spot(None, [0, 1, 2], avoid=[], gap=0.0):
+                out.append(((x, y, yaw), [], list(order), 20.0 + self.spot_cost(x, y)))
+                if len(out) >= self.SPOT_MAX // 2:
+                    break
+        return out
 
     def run_sequence(self, spot, base, seq):
         """The planned moves in order; a move that fails or no longer plans: the rest re-planned from the belief as it

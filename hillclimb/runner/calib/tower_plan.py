@@ -149,21 +149,27 @@ class Kin:
 
     def ik_one(self, pos, Rw, q0, iters=300):
         q = np.array(q0, dtype=float)
+        jp, jr = np.zeros((3, self.m.nv)), np.zeros((3, self.m.nv))
+        reg = 1e-4 * np.eye(6)
         for _ in range(iters):
             self.d.qpos[self.qadr] = q
             mujoco.mj_kinematics(self.m, self.d)
             mujoco.mj_comPos(self.m, self.d)
             R = self.d.site_xmat[self.site].reshape(3, 3)
             e_pos = pos - self.d.site_xpos[self.site]
-            e_rot = 0.5 * sum(np.cross(R[:, k], Rw[:, k]) for k in range(3))
-            if np.linalg.norm(e_pos) < 3e-4 and np.linalg.norm(e_rot) < 3e-3:
+            # 0.5 * sum_k R[:, k] x Rw[:, k], from M = R Rw^T (one matmul: np.cross per column was half the planning
+            # time, Nov 8)
+            M = R @ Rw.T
+            e_rot = 0.5 * np.array([M[1, 2] - M[2, 1], M[2, 0] - M[0, 2], M[0, 1] - M[1, 0]])
+            if math.sqrt(e_pos @ e_pos) < 3e-4 and math.sqrt(e_rot @ e_rot) < 3e-3:
                 # the cross-product error also vanishes at a half turn: only a near match counts
                 return q, bool(np.trace(R.T @ Rw) > 2.99)
-            jp, jr = np.zeros((3, self.m.nv)), np.zeros((3, self.m.nv))
+            jp[:] = 0.0
+            jr[:] = 0.0
             mujoco.mj_jacSite(self.m, self.d, jp, jr, self.site)
             J = np.vstack([jp[:, self.dofs], 0.3 * jr[:, self.dofs]])
             e = np.concatenate([e_pos, 0.3 * e_rot])
-            q = np.clip(q + J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(6), e), self.lo, self.hi)
+            q = np.clip(q + J.T @ np.linalg.solve(J @ J.T + reg, e), self.lo, self.hi)
         return q, False
 
     def ik(self, pos, frames, q_ref, margin=0.05, extra=()):

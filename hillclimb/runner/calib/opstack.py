@@ -50,7 +50,7 @@ TEAM = "http://127.0.0.1:18081/api/state"
 DREAM = "http://127.0.0.1:18084/api/state"
 TABLE_Z = -0.008
 MAX_RATE = 0.3
-TIP_Y_MIN = -0.20  # -0.15 refused orange at y -154 mm (Nov 8 14:24); the strip and right arm sit past y -35 cm
+TIP_Y_MIN = -0.26  # -0.15 refused orange at y -154 mm (Nov 8 14:24); the strip and right arm sit past y -35 cm
 CYAN, AMBER = (255, 224, 63), (40, 170, 245)
 COLOURS = ("green", "blue", "purple")
 
@@ -422,7 +422,7 @@ class GateWatch:
 # refuses one that breaks it, and stream() runs it again before the first goal is posted. The stacks are the
 # believed blocks (op.st["blocks"], the held one left out); the held block's bottom is plan.held[1] under the
 # fingertips.
-RULE_NEAR = 0.12
+RULE_NEAR = 0.07  # 0.12 fenced the middle of the table off around a 2-high stack (Nov 8 15:09); 7 cm still clears the stack
 RULE_CLEAR = 0.02
 RULE_NO_DIAG = 0.06
 RULE_XY_TOL = 0.003  # a piece whose fingertips stay within this (x, y) and turn under RULE_YAW_TOL is vertical

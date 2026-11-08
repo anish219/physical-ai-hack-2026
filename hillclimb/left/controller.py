@@ -334,7 +334,7 @@ class LeftController:
                     self._start_job("place", lambda: self.backend.place_next(self._scene(), max(1.0, min(s.step_timeout_s, tl - s.freeze_s))))
             elif st == "REST":
                 rested = self.clock() - getattr(self, "_exhausted_at", -1e9)
-                if len(self.tower) < self.active_goal() and tl > s.freeze_s and rested >= 40.0:
+                if len(self.tower) < self.active_goal() and tl > s.freeze_s and rested >= float(os.environ.get("REST_RETRY_S", "3")):
                     self._set("STACK", "below goal")
                 elif self.clock() - self.last_rest_check >= s.rest_check_s:
                     self.last_rest_check = self.clock()
