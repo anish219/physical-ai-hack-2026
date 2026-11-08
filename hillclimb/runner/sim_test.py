@@ -47,6 +47,16 @@ def main():
     out["prepare_s"] = round(time.time() - t0, 1)
     out["prepare_max_block_move_mm"] = max(mv.values()) if mv else 0.0
     print("PREPARE", json.dumps(out["prepare"], default=str)[:600], "max block move mm", out["prepare_max_block_move_mm"], flush=True)
+    gate = os.environ.get("GATE_FILE")
+    if gate:  # the gate is shut: place_next must refuse at once and move nothing
+        t2 = time.time()
+        r = be.place_next(deadline_s=30)
+        tr2 = truth()
+        mv2 = moved(tr1, tr2)
+        out["gate_shut"] = {"ok": r.get("ok"), "why": r.get("why"), "s": round(time.time() - t2, 2),
+                            "max_block_move_mm": max(mv2.values()) if mv2 else 0.0}
+        print("GATE SHUT", json.dumps(out["gate_shut"]), flush=True)
+        open(gate, "w").write("open\n")
     if "--fail-test" in sys.argv and be.moves:
         nxt = next((m for m in be.moves if m[0] == "stack"), None)
         if nxt:  # the planned block vanishes from where the runner saw it (moved 12 cm by the sim) before its pick

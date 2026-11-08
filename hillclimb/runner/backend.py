@@ -100,6 +100,9 @@ class RunnerBackend:
     def place_next(self, scene=None, deadline_s=120.0):
         """One more block on the tower: the planned clearing moves, then the next stack place. dict, never raises."""
         T0 = _wall.time()
+        gate = os.environ.get("GATE_FILE")
+        if gate and not os.path.exists(gate):  # never touch a block before the USB gate (and never wait on it here)
+            return {"ok": False, "placed_id": None, "why": "USB gate shut", "tower": list(self.tower), "timing": {"s": 0.0}}
         try:
             if not self.prepared:
                 r = self.prepare(scene)

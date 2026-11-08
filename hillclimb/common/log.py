@@ -18,8 +18,8 @@ class JsonlLog:
         except Exception:  # noqa: BLE001
             pass
 
-    def write(self, kind: str, **fields) -> None:
-        row = {"t": round(time.time(), 3), "kind": kind, **fields}
+    def write(self, event: str, /, **fields) -> None:
+        row = {"t": round(time.time(), 3), "event": event, **fields}
         try:
             line = json.dumps(row, default=str)
             with self._lock, self.path.open("a") as f:

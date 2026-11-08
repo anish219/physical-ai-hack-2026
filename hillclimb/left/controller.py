@@ -330,15 +330,17 @@ class LeftController:
 
         def run():
             t0 = time.time()
+            res: dict = {"ok": False, "why": "job did not finish", "raised": True}
             try:
-                res = fn() or {}
-                res = res if isinstance(res, dict) else {"ok": bool(res)}
-            except Exception as e:  # noqa: BLE001
+                got = fn() or {}
+                res = dict(got) if isinstance(got, dict) else {"ok": bool(got)}
+            except BaseException as e:  # noqa: BLE001  a backend failure is a state, never a dead thread
                 res = {"ok": False, "why": f"backend raised {type(e).__name__}: {e}"[:300], "raised": True}
-                self.log.write("backend_error", kind=kind, tb=traceback.format_exc()[-800:])
-            res["kind"], res["s"] = kind, round(time.time() - t0, 1)
-            res["_before"] = before
-            self._job_result = res
+                self.log.write("backend_error", step=kind, tb=traceback.format_exc()[-800:])
+            finally:
+                res["kind"], res["s"] = kind, round(time.time() - t0, 1)
+                res["_before"] = before
+                self._job_result = res
 
         self._job_result = None
         self._job = threading.Thread(target=run, name=f"left-{kind}", daemon=True)

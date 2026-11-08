@@ -21,7 +21,7 @@ DEFAULTS = {
     # the strip crop, normalized (x0, y0, x1, y1); this one is the box the recorded tests used (280,120,220,170 of 640x360)
     "STRIP_BOX": [0.4375, 0.3333, 0.78125, 0.8056],
     "FAST_PERIOD_S": 2.0,  # one fast read every this many seconds
-    "FAST_TIMEOUT_S": 3.0,  # a fast read slower than this counts as "no"
+    "FAST_TIMEOUT_S": 5.0,  # a fast read slower than this counts as "no" (measured max about 5 s)
     "AGENTIC_BUDGET_S": 15.0,  # an agentic check slower than this counts as "no"
     "AGENTIC_MAX_TOOLS": 4,
     "AGENTIC_MIN_GAP_S": 1.5,  # the second agentic yes must look at a "now" frame at least this much newer
