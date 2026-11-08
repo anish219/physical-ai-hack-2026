@@ -1,7 +1,7 @@
 {
-  "version": 1,
-  "name": "USB-C reference alignment and taught insertion",
-  "status": "prepared offline; not executed on hardware",
+  "version": 2,
+  "name": "USB-C multiview alignment and CV-corrected world-Z descent",
+  "status": "prepared offline; continuous Cartesian controller not yet executed on hardware",
   "reference": "reference.png",
   "demonstrations": [
     {
@@ -2246,5 +2246,17 @@
     "damping": 0.1,
     "motion_rad_s": 0.15,
     "settle_s": 0.15
+  },
+  "cartesian": {
+    "distance_m": 0.028,
+    "speed_m_s": 0.0015,
+    "probe_m": 0.0006,
+    "lateral_gain": 0.3,
+    "lateral_step_m": 0.001,
+    "adapt_gain": 0.1,
+    "motion_rad_s": 0.15,
+    "settle_s": 0.15,
+    "hz": 20,
+    "depth_tolerance_m": 0.0004
   }
 }

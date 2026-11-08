@@ -10,9 +10,10 @@ import urllib.request
 import cv2
 import numpy as np
 
-from dream_hackathon.bundle_pull import HttpArm, ToolKinematics, move_to, play, sample
+from dream_hackathon.bundle_pull import HttpArm, ToolKinematics, move_to, sample
 from dream_hackathon.bundle_vision import servo
 from dream_hackathon.orchestration import lookup
+from dream_hackathon.usb_cartesian import descend
 
 
 class InsertionVision:
@@ -70,8 +71,8 @@ def push_rows(demos, aligned_q, grip, kinematics, samples, duration):
     return result
 
 
-def execute(arm, vision, plan, kinematics, report, policy_stop=None, sleep=time.sleep):
-    """Wait alongside policy, take over when near, align, then execute taught push."""
+def execute(arm, vision, plan, kinematics, report, policy_stop=None, sleep=time.sleep, *, align_only=False):
+    """Wait alongside policy, align, then continuously correct XY while descending in world Z."""
     while True:
         camera_image = arm.image()
         try:
@@ -101,14 +102,16 @@ def execute(arm, vision, plan, kinematics, report, policy_stop=None, sleep=time.
     report('aligned', {**status, 'q': aligned.tolist()}, image)
     if not status['aligned']:
         raise ValueError('Live alignment changed before the insertion push')
-    rows = push_rows(plan['demonstrations'], aligned, grip, kinematics,
-                     plan['push_samples'], plan['push_seconds'])
-    report('push', {'rows': len(rows), 'seconds': plan['push_seconds'], 'targets': rows}, None)
-    play(arm, rows, hz=plan['hz'])
+    if align_only:
+        result = {'script_complete': True, 'aligned': True, 'descent_complete': False,
+                  'insertion_verified': False, 'release_commanded': False}
+        report('complete', result, None)
+        return result
+    result = descend(arm, vision, kinematics, plan['cartesian'], grip, report)
     if plan.get('release_grip') is not None:
-        arm.command(np.asarray(rows[-1]['q']), plan['release_grip'])
-    result = {'script_complete': True, 'push_complete': True, 'insertion_verified': False,
-              'release_commanded': plan.get('release_grip') is not None}
+        arm.command(arm.state()[0], plan['release_grip'])
+    result.update(script_complete=True, push_complete=True, insertion_verified=False,
+                  release_commanded=plan.get('release_grip') is not None)
     report('complete', result, None)
     return result
 
@@ -153,6 +156,9 @@ def prepare(dataset, selections, output):
             'demonstrations': demos, 'hz': 30, 'poll_seconds': 0.1, 'push_samples': 101,
             'push_seconds': float(np.mean([demo['rows'][-1]['t'] for demo in demos])),
             'release_grip': None,
+            'cartesian': {'distance_m': 0.028, 'speed_m_s': 0.0015, 'probe_m': 0.0006,
+                          'lateral_gain': 0.3, 'lateral_step_m': 0.001, 'adapt_gain': 0.1,
+                          'motion_rad_s': 0.15, 'settle_s': 0.15, 'hz': 20, 'depth_tolerance_m': 0.0004},
             'vision': {'port_polygon': [[230, 193], [341, 179], [352, 243], [305, 257]],
                        'port_point': [316, 203], 'plug_roi': [285, 185, 65, 58],
                        'hsv_low': [0, 80, 60], 'hsv_high': [25, 255, 255],
@@ -177,7 +183,8 @@ def main(argv=None):
     run.add_argument('--server', default='http://127.0.0.1:8692')
     run.add_argument('--config', type=pathlib.Path, help='Station model/TCP config, needed for execution')
     run.add_argument('--execute', action='store_true',
-                     help='Wait for near-port detection, take over, align and push')
+                     help='Wait for near-port detection, take over, align and descend with CV feedback')
+    run.add_argument('--align-only', action='store_true', help='Finish after alignment; do not descend or release')
     run.add_argument('--check-image', type=pathlib.Path, help='Offline detector evaluation; no arm requests')
     run.add_argument('--policy-stop-url', help='POST {} and await completion before commanding the arm')
     run.add_argument('--policy-status-url', help='After stop, GET this JSON until the selected busy field is false')
@@ -242,7 +249,7 @@ def main(argv=None):
                 time.sleep(plan['poll_seconds'])
 
     result = execute(HttpArm(args.server), vision, plan, ToolKinematics.from_config(args.config, 'right'),
-                     report, stop_policy if args.policy_stop_url else None)
+                     report, stop_policy if args.policy_stop_url else None, align_only=args.align_only)
     print(json.dumps(result), flush=True)
     return result
 

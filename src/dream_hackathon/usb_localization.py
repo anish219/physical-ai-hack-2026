@@ -115,6 +115,8 @@ class HeldUSB:
             yy, xx = np.nonzero(labels == label)
             pixels = np.column_stack([xx, yy]).astype(float)
             center = pixels.mean(axis=0)
+            if center[1] > self.settings.get('grip_max_body_y', 0.78) * height:
+                continue
             distance = float(np.linalg.norm(center - anchor))
             if distance > self.settings.get('grip_search_radius', 0.35) * height:
                 continue
