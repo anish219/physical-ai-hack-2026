@@ -16,80 +16,35 @@ from dream_hackathon.orchestration import lookup
 
 
 class InsertionVision:
-    """Locate the taught port plane and held orange USB in one wrist image.
+    """Reacquire the port across viewpoints and align it relative to the live held USB."""
 
-    Port features are expressed relative to the live plug tip and plug axis,
-    so a different grasp position does not request an impossible movement of
-    the wrist-mounted camera relative to its own gripper.
-    """
+    def __init__(self, reference, settings, views=()):
+        from dream_hackathon.usb_localization import HeldUSB, PortRegistration
 
-    def __init__(self, reference, settings):
         self.reference, self.settings = reference, settings
-        self.gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-        self.anchors = np.asarray(settings['port_polygon'], np.float32)
-        mask = np.zeros(self.gray.shape, np.uint8)
-        cv2.fillConvexPoly(mask, self.anchors.astype(np.int32), 255)
-        x, y, w, h = settings['plug_roi']
-        mask[y:y+h, x:x+w] = 0
-        self.points = cv2.goodFeaturesToTrack(self.gray, 150, 0.01, 3, mask=mask)
-        if self.points is None or len(self.points) < 8:
-            raise ValueError('Reference port plane needs eight trackable features')
-        tip, basis = self.plug(reference)
+        self.registration = PortRegistration(reference, settings)
+        for view in views:
+            self.registration.add_view(view)
+        self.usb = HeldUSB(settings)
+        self.anchors = np.float32(settings['port_polygon'])
+        tip, basis, _ = self.usb.locate(reference)
         self.target = ((self.anchors - tip) @ basis).ravel()
-
-    def plug(self, frame):
-        x, y, w, h = self.settings['plug_roi']
-        crop = frame[y:y+h, x:x+w]
-        mask = cv2.inRange(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV),
-                           np.array(self.settings['hsv_low']), np.array(self.settings['hsv_high']))
-        count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
-        if count < 2:
-            raise ValueError('Held orange USB is not visible')
-        label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-        if stats[label, cv2.CC_STAT_AREA] < self.settings['minimum_plug_pixels']:
-            raise ValueError('Too few held USB pixels')
-        yy, xx = np.nonzero(labels == label)
-        pixels = np.column_stack((xx + x, yy + y)).astype(float)
-        _, _, axes = np.linalg.svd(pixels - pixels.mean(axis=0), full_matrices=False)
-        direction = axes[0]
-        if direction @ np.asarray(self.settings['plug_axis_hint']) < 0:
-            direction = -direction
-        positions = pixels @ direction
-        tip = pixels[positions <= np.quantile(positions, 0.15)].mean(axis=0)
-        basis = np.column_stack(([direction[1], -direction[0]], direction))
-        return tip, basis
 
     def measure(self, image):
         frame = cv2.resize(image, self.reference.shape[1::-1])
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        options = dict(winSize=(25, 25), maxLevel=3,
-                       criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 0.01))
-        live, found, _ = cv2.calcOpticalFlowPyrLK(self.gray, gray, self.points, None, **options)
-        if live is None or found is None:
-            raise ValueError('Port plane not tracked')
-        back, returned, _ = cv2.calcOpticalFlowPyrLK(gray, self.gray, live, None, **options)
-        if back is None or returned is None:
-            raise ValueError('Port plane reverse tracking failed')
-        valid = found.ravel().astype(bool) & returned.ravel().astype(bool)
-        valid &= np.linalg.norm(back - self.points, axis=2).ravel() < 1
-        if valid.sum() < 8:
-            raise ValueError('Too few consistent port-plane matches')
-        homography, inliers = cv2.findHomography(self.points[valid], live[valid], cv2.RANSAC, 1.5)
-        if homography is None or inliers is None or inliers.sum() < 8:
-            raise ValueError('Port plane not located')
-        anchors = cv2.perspectiveTransform(self.anchors.reshape(-1, 1, 2), homography).reshape(-1, 2)
-        tip, basis = self.plug(frame)
+        anchors, port, port_status = self.registration.locate(frame)
+        tip, basis, plug_status = self.usb.locate(frame)
         features = ((anchors - tip) @ basis).ravel()
         errors = np.linalg.norm((features - self.target).reshape(-1, 2), axis=1)
-        port = cv2.perspectiveTransform(np.float32(self.settings['port_point']).reshape(1, 1, 2), homography)[0, 0]
         gap = float(np.linalg.norm(port - tip))
         status = {'known': True, 'near_opening': bool(errors.max() <= self.settings['near_error_px']
                                                     and gap <= self.settings['near_gap_px']),
                   'aligned': bool(errors.max() <= self.settings['align_tolerance_px']),
                   'error_px': float(errors.max()), 'tip_port_gap_px': gap,
-                  'matched_features': int(inliers.sum()), 'features': features.tolist()}
+                  **port_status, **plug_status, 'port_point': port.tolist(), 'features': features.tolist()}
         cv2.polylines(frame, [np.rint(anchors).astype(np.int32)], True, (0, 255, 0), 1)
-        cv2.circle(frame, tuple(np.rint(tip).astype(int)), 4, (0, 128, 255), 1)
+        cv2.arrowedLine(frame, tuple(np.rint(tip + basis[:, 1] * 20).astype(int)),
+                        tuple(np.rint(tip).astype(int)), (0, 128, 255), 2)
         cv2.circle(frame, tuple(np.rint(port).astype(int)), 4, (255, 0, 255), 1)
         return features, status, frame
 
@@ -118,10 +73,11 @@ def push_rows(demos, aligned_q, grip, kinematics, samples, duration):
 def execute(arm, vision, plan, kinematics, report, policy_stop=None, sleep=time.sleep):
     """Wait alongside policy, take over when near, align, then execute taught push."""
     while True:
+        camera_image = arm.image()
         try:
-            _, status, image = vision.measure(arm.image())
+            _, status, image = vision.measure(camera_image)
         except ValueError as error:
-            report('waiting', {'known': False, 'reason': str(error)}, None)
+            report('waiting', {'known': False, 'reason': str(error)}, camera_image)
             sleep(plan['poll_seconds'])
             continue
         report('waiting', status, image)
@@ -238,7 +194,10 @@ def main(argv=None):
     reference = cv2.imread(str(args.plan.parent / plan['reference']))
     if reference is None:
         parser.error('Reference image could not be read')
-    vision = InsertionVision(reference, plan['vision'])
+    views = [cv2.imread(str(args.plan.parent / name)) for name in plan.get('view_images', [])]
+    if any(view is None for view in views):
+        parser.error('A port view image could not be read')
+    vision = InsertionVision(reference, plan['vision'], views)
     args.output.mkdir(parents=True, exist_ok=True)
 
     def report(phase, status, image):
