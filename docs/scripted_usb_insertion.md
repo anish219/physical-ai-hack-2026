@@ -149,6 +149,14 @@ insertion data is backed up at
 
 ## Integration, results and validation
 
+The completed version passed 36 tests both locally and on the NUC, plus lint.
+An offline 101-pose IK review with the NUC's calibrated model exercised a 28 mm
+world-Z path with lateral corrections and fixed orientation, without hardware
+commands. The isolated NUC copy is at
+`/home/pah/laptop-handoff-20261108/continuous-insertion-review`; it does not replace
+the active controller checkout. These checks establish software/model behavior,
+not successful live visual alignment or physical insertion.
+
 Keep the right-arm strategy's existing insertion verification and retry edges.
 After the stroke, inspect fully seated and gripper released before advancing.
 For an orchestration Script binding, target right and include `--quiet` so stdout

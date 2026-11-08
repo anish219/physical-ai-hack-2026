@@ -1,4 +1,4 @@
-"""Standalone entry point for recorded/CV scripted USB insertion."""
+"""Standalone entry point for continuous CV-corrected Cartesian USB insertion."""
 
 from dream_hackathon.usb_insertion import main
 

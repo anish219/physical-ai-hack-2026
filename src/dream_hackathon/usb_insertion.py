@@ -1,4 +1,4 @@
-"""Policy-to-script USB insertion: local wrist detection, visual alignment, taught push."""
+"""Policy-to-script USB insertion: multiview localization and closed-loop world-Z descent."""
 
 import argparse
 import json
@@ -151,7 +151,7 @@ def prepare(dataset, selections, output):
                 raise ValueError('Could not decode the selected pre-insertion reference')
             if not cv2.imwrite(str(output / 'reference.png'), image):
                 raise ValueError('Could not save reference image')
-    plan = {'version': 1, 'name': 'USB-C reference alignment and taught insertion',
+    plan = {'version': 2, 'name': 'USB-C reference alignment and CV-corrected world-Z descent',
             'status': 'prepared offline; not executed on hardware', 'reference': 'reference.png',
             'demonstrations': demos, 'hz': 30, 'poll_seconds': 0.1, 'push_samples': 101,
             'push_seconds': float(np.mean([demo['rows'][-1]['t'] for demo in demos])),
@@ -226,7 +226,9 @@ def main(argv=None):
         return
     if not args.execute:
         print(json.dumps({'prepared': True, 'demonstrations': len(plan['demonstrations']),
-                          'push_seconds': plan['push_seconds'], 'execute': False}))
+                          'world_down_m': plan['cartesian']['distance_m'],
+                          'down_speed_m_s': plan['cartesian']['speed_m_s'],
+                          'align_only': args.align_only, 'execute': False}))
         return
     if args.config is None:
         parser.error('--execute requires the existing station --config for calibrated TCP retargeting')
