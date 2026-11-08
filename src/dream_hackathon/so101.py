@@ -134,6 +134,9 @@ def main() -> None:
     parser.add_argument("--no-dashboard", action="store_true", help="Track immediately without browser controls")
     parser.add_argument("--remote-server", help="Use an independently owned arm server instead of opening CAN")
     parser.add_argument(
+        "--server-gripper-torque", action="store_true", help="Use the arm server's gripper torque setting"
+    )
+    parser.add_argument(
         "--dataset-dir", type=pathlib.Path, help="Examples folder (default: station dataset/so101/SIDE-context)"
     )
     parser.add_argument("--task", help="Task text saved with each example")
@@ -277,7 +280,7 @@ def main() -> None:
                         controls.report(arm_open=True, power_off=False, message="")
                         grip_revision = -1
                 if robot is not None:
-                    if not args.dry_run and grip_revision != state["grip_revision"]:
+                    if not args.dry_run and not args.server_gripper_torque and grip_revision != state["grip_revision"]:
                         try:
                             apply_hold_torque(robot, args.side, state["grip_torque_nm"])
                             controls.report(grip_error="")

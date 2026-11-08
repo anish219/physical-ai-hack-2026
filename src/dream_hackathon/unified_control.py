@@ -94,6 +94,7 @@ class LeaderAssignment:
                         side,
                         "--remote-server",
                         self.arm_urls[side],
+                        "--server-gripper-torque",
                         "--dashboard-port",
                         str(self.port),
                         "--dataset-dir",
@@ -202,6 +203,7 @@ class UnifiedController:
         state["inputs"] = dict(self.inputs)
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
+            state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]
         return state
 
     def pause(self, sides):
@@ -245,7 +247,16 @@ class UnifiedController:
                 raise ValueError("Choose SO-101 as an arm's input first")
             if body.get("tracking"):
                 self.nodes[self.leader.side].cancel_home()
+            if "grip_torque_nm" in body:
+                self.nodes[self.leader.side].set_torque(body["grip_torque_nm"])
             return self.leader.action(path, body)
+
+    def set_arm_torque(self, side, torque):
+        if side not in self.nodes:
+            raise ValueError("Unknown arm")
+        with self.input_lock:
+            self.nodes[side].set_torque(torque)
+            return self.state()
 
     def dream_action(self, selection, action, body):
         if selection not in self.callers:
@@ -344,6 +355,8 @@ class UnifiedPage:
                             controller.select_input(controller.leader.side, None)
                     elif self.path.startswith("/api/arms/") and self.path.endswith("/input"):
                         controller.select_input(self.path.split("/")[3], body.get("source"))
+                    elif self.path.startswith("/api/arms/") and self.path.endswith("/grip-torque"):
+                        controller.set_arm_torque(self.path.split("/")[3], body.get("torque_nm"))
                     elif self.path.startswith("/api/arms/") and self.path.endswith(("/home", "/zero")):
                         side = self.path.split("/")[3]
                         if side not in controller.nodes:

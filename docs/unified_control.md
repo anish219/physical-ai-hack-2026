@@ -20,6 +20,14 @@ releases Right, and vice versa. Dream API can be assigned to either or both arms
 Changing input cancels affected API playback (including pending replies) and
 releases the previous leader before the new source can command the arm.
 
+Each arm card also has its own **Gripper holding torque** slider (0.1–2.0 N·m)
+and applied/measured motor-torque feedback. The arm server owns this setting for
+all inputs, including Dream API and no input. Input changes do not reset it.
+The unified SO-101 child uses `--server-gripper-torque`, so its remembered leader
+settings never overwrite the arm's torque target. Standalone leader control keeps
+its existing torque slider behavior. `POST /api/arms/{side}/grip-torque` accepts
+`{"torque_nm": number}` without requiring a leader assignment.
+
 SO-101 and Dream API have separate control panels below the arm cards. SO-101 selection
 connects the leader but starts untracked. **Track** enables the selected arm if
 needed and captures fresh hand/tool anchors. **Untrack** holds its last target.
@@ -44,7 +52,8 @@ The SO-101 panel retains the leader controls:
 - Record example / Stop & save example, frame count, dataset folder and saved
   episode reporting.
 - Reject current/pending example or reject last saved example, as before.
-- Grip holding torque, 0.1–2.0 N·m, applied/measured torque and HOLDING feedback.
+- Per-arm gripper holding torque, applied/measured torque and HOLDING feedback
+  are in the arm cards and work independently of the selected input.
 - Per-arm Kill and Return to 0 are in the arm cards above both input panels.
 - Existing recording, startup and torque-error reporting.
 

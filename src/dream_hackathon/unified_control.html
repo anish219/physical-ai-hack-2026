@@ -33,12 +33,18 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <div class="actions"><button class="power" id="left-power">Turn on</button><button id="left-home">Return to 0</button><button id="left-zero">Set 0</button></div>
 <p class="zero-note" id="left-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="left-input-dream" aria-pressed="false">Dream API</button><button id="left-input-so101" aria-pressed="false">SO-101</button>
-<button id="left-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div><p class="status" id="left-status"></p></article>
+<button id="left-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
+<label for="left-grip-torque">Gripper holding torque <output id="left-grip-value">—</output></label>
+<input id="left-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
+<div class="feedback" id="left-grip-feedback"></div><p class="status" id="left-status"></p></article>
 <article class="card" id="right-arm"><div class="card-title"><h2>Right arm</h2><span class="badge" id="right-power-state">OFF</span></div>
 <div class="actions"><button class="power" id="right-power">Turn on</button><button id="right-home">Return to 0</button><button id="right-zero">Set 0</button></div>
 <p class="zero-note" id="right-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="right-input-dream" aria-pressed="false">Dream API</button><button id="right-input-so101" aria-pressed="false">SO-101</button>
-<button id="right-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div><p class="status" id="right-status"></p></article>
+<button id="right-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
+<label for="right-grip-torque">Gripper holding torque <output id="right-grip-value">—</output></label>
+<input id="right-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
+<div class="feedback" id="right-grip-feedback"></div><p class="status" id="right-status"></p></article>
 </section>
 <section class="cameras" aria-label="Live cameras">
 <figure><img id="cam-left" alt="Left wrist camera"><figcaption>Left wrist</figcaption></figure>
@@ -51,9 +57,6 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <div class="actions spaced"><button id="track">Track</button><button id="untrack">Untrack</button></div>
 <label for="scale">Translation scale <output id="value">1.00×</output></label>
 <input id="scale" type="range" min="0" max="3" step="0.05" value="1">
-<label for="grip-torque">Grip holding torque <output id="grip-value">0.50 N·m</output></label>
-<input id="grip-torque" type="range" min="0.1" max="2" step="0.05" value="0.5">
-<div class="feedback" id="grip-feedback"></div>
 <div class="actions spaced"><button id="record">Record example</button><button id="reject">Reject example</button></div>
 <p id="record-status"></p></article>
 <article class="card" id="dream-panel"><p class="panel-label">Model input</p><h2>Dream API</h2>
@@ -68,7 +71,7 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 </section><p class="error" id="message" role="status"></p>
 </main><script>
 const $=id=>document.getElementById(id);
-let station={},apiSelection='left',drafts={},dragging=false,gripDragging=false;
+let station={},apiSelection='left',drafts={},dragging=false,gripDragging={};
 function saveDraft(){drafts[apiSelection]={task:$('api-task').value,checkpoint:$('api-checkpoint').value};}
 function selectApi(value){saveDraft();apiSelection=value;$('api-selection').value=value;
 const d=drafts[value]||(station.dream||{})[value]||{};$('api-task').value=d.task||'';
@@ -85,15 +88,17 @@ $(side+'-home').textContent=a.homing?'Returning…':'Return to 0';
 $(side+'-home').disabled=!!a.homing;$(side+'-zero').disabled=!a.arm_open;
 $(side+'-zero-note').textContent=a.zero_joints?'Saved zero · retained across Kill and power-on':'First power-on captures the initial zero';
 $(side+'-status').textContent=a.message||'';
+if(!gripDragging[side]&&a.grip_torque_nm!=null){$(side+'-grip-torque').value=a.grip_torque_nm;
+$(side+'-grip-value').textContent=Number(a.grip_torque_nm).toFixed(2)+' N·m';}
+const applied=a.grip_applied_torque_nm==null?'pending power-on':Number(a.grip_applied_torque_nm).toFixed(2)+' N·m';
+const measured=a.grip_measured_torque_nm==null?'—':Math.abs(a.grip_measured_torque_nm).toFixed(2)+' N·m';
+$(side+'-grip-feedback').textContent='Applied: '+applied+' · Measured: '+measured+(a.grip_holding?' · HOLDING':'');
 for(const source of ['dream','so101'])$(side+'-input-'+source).setAttribute('aria-pressed',String(inputs[side]===source));}
 const assigned=!!s.assigned_side;$('side').textContent=assigned?s.assigned_side+' arm':'Not assigned';
 $('tracking-state').textContent=s.tracking?'TRACKED':'UNTRACKED';$('tracking-state').dataset.on=!!s.tracking;
-for(const id of ['track','untrack','scale','grip-torque'])$(id).disabled=!assigned;
+for(const id of ['track','untrack','scale'])$(id).disabled=!assigned;
 $('hint').textContent=assigned?'Track captures fresh leader and arm anchors. Untrack holds position.':'Choose SO-101 under either arm. Only one arm can use the leader.';
 if(!dragging){$('scale').value=s.scale;$('value').textContent=Number(s.scale).toFixed(2)+'×';}
-if(!gripDragging){$('grip-torque').value=s.grip_torque_nm;$('grip-value').textContent=Number(s.grip_torque_nm).toFixed(2)+' N·m';}
-$('grip-feedback').textContent=s.grip_measured_torque_nm==null?'':
-'Measured motor torque: '+Math.abs(s.grip_measured_torque_nm).toFixed(2)+' N·m'+(s.grip_holding?' · HOLDING':'');
 $('record').disabled=!assigned||!s.arm_open;$('record').textContent=s.recording_requested?'Stop & save example':'Record example';
 $('reject').disabled=!assigned||!(s.recording||s.recording_requested||s.saved_episodes);
 $('reject').textContent=s.recording||s.recording_requested?'Reject current example':'Reject last saved example';
@@ -112,6 +117,10 @@ for(const side of ['left','right']){
 $(side+'-power').onclick=()=>action('/api/arms/'+side+'/power',{enabled:!station.arms[side].arm_open});
 $(side+'-home').onclick=()=>action('/api/arms/'+side+'/home');
 $(side+'-zero').onclick=()=>action('/api/arms/'+side+'/zero');
+$(side+'-grip-torque').oninput=()=>{gripDragging[side]=true;
+$(side+'-grip-value').textContent=Number($(side+'-grip-torque').value).toFixed(2)+' N·m';};
+$(side+'-grip-torque').onchange=async()=>{const torque=Number($(side+'-grip-torque').value);
+await action('/api/arms/'+side+'/grip-torque',{torque_nm:torque});gripDragging[side]=false;render(station);};
 for(const source of ['dream','so101'])$(side+'-input-'+source).onclick=async()=>{
 const s=await action('/api/arms/'+side+'/input',{source:station.inputs[side]===source?null:source});
 if(s&&source==='dream'&&s.inputs[side]==='dream'){selectApi(s.inputs.left==='dream'&&s.inputs.right==='dream'?'both':side);render(s);}};}
@@ -123,8 +132,6 @@ $('record').onclick=()=>action('/api/control',{recording_requested:!station.reco
 $('reject').onclick=()=>action('/api/reject');
 $('scale').oninput=()=>{dragging=true;$('value').textContent=Number($('scale').value).toFixed(2)+'×';};
 $('scale').onchange=()=>{dragging=false;action('/api/control',{scale:Number($('scale').value)});};
-$('grip-torque').oninput=()=>{gripDragging=true;$('grip-value').textContent=Number($('grip-torque').value).toFixed(2)+' N·m';};
-$('grip-torque').onchange=()=>{gripDragging=false;action('/api/control',{grip_torque_nm:Number($('grip-torque').value)});};
 async function poll(){try{const r=await fetch('/api/state');if(!r.ok)throw Error('Connection unavailable');render(await r.json());$('connection').textContent='Connected';}
 catch(e){$('connection').textContent='Disconnected';}}
 function cameras(){for(const [id,role] of [['cam-left','left'],['cam-top','overhead'],['cam-right','right']]){

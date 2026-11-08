@@ -153,6 +153,7 @@ def test_assignment_switch_changes_only_leader_process_and_preserves_settings(tm
         log_dir=tmp_path,
     )
     leader.select("right")
+    assert "--server-gripper-torque" in commands[-1]
     assert commands[-1][commands[-1].index("--remote-server") + 1] == "http://right"
     leader.select("left")
     assert commands[-1][commands[-1].index("--remote-server") + 1] == "http://left"
@@ -179,7 +180,7 @@ def test_page_contains_every_existing_leader_control_and_routes_to_selected_chil
 
     nodes = {
         side: SimpleNamespace(
-            snapshot=lambda: dict(arm_open=False, requested_power=False, message="Off"),
+            snapshot=lambda: dict(arm_open=False, requested_power=False, message="Off", grip_torque_nm=1.0),
             power=lambda enabled: {"problems": []},
             cancel_home=lambda: None,
             return_zero=lambda: actions.append(("home", {})),
@@ -199,8 +200,10 @@ def test_page_contains_every_existing_leader_control_and_routes_to_selected_chil
             "record",
             "reject",
             "scale",
-            "grip-torque",
-            "grip-feedback",
+            "left-grip-torque",
+            "left-grip-feedback",
+            "right-grip-torque",
+            "right-grip-feedback",
             "left-power",
             "right-power",
             "left-home",
@@ -400,6 +403,8 @@ def test_input_selection_hands_off_and_so101_is_exclusive(tmp_path):
         }
         controller = unified_control.UnifiedController(nodes, Leader(), callers)
         try:
+            controller.set_arm_torque("left", 1.35)
+            controller.set_arm_torque("right", 0.75)
             controller.select_input("right", "so101")
             controller.select_input("left", "so101")
             assert controller.inputs == {"left": "so101", "right": None}
@@ -409,12 +414,16 @@ def test_input_selection_hands_off_and_so101_is_exclusive(tmp_path):
             for side in nodes:
                 controller.select_input(side, "dream")
             assert controller.inputs == {"left": "dream", "right": "dream"}
+            assert left_node.snapshot()["grip_torque_nm"] == 1.35
+            assert right_node.snapshot()["grip_torque_nm"] == 0.75
             callers["both"].connect()
             wait_for(lambda: callers["both"].sample is not None)
             controller.dream_action("both", "run", {"task": "move"})
             assert model.entered.wait(2)
             controller.select_input("right", "so101")
             assert controller.inputs == {"left": "dream", "right": "so101"}
+            assert left_node.snapshot()["grip_torque_nm"] == 1.35
+            assert right_node.snapshot()["grip_torque_nm"] == 0.75
             model.release.set()
             wait_for(lambda: not callers["both"].snapshot()["busy"])
             assert not any(path == "/target" for log in logs.values() for path, _ in log)
@@ -429,3 +438,30 @@ def test_input_selection_hands_off_and_so101_is_exclusive(tmp_path):
                 caller.close()
             for node in nodes.values():
                 node.close()
+
+
+def test_arm_torque_endpoint_works_without_leader_and_is_applied_during_api_targets(tmp_path):
+    from test_dream_caller import wait_for
+
+    left, lrobot = make_node(tmp_path, "left")
+    right, rrobot = make_node(tmp_path, "right")
+    leader = SimpleNamespace(side=None, state=lambda: Controls(1, "none").snapshot())
+    page = unified_control.UnifiedPage(unified_control.UnifiedController({"left": left, "right": right}, leader), 0)
+    base = f"http://127.0.0.1:{page.port}"
+    try:
+        assert request(base, "/api/arms/left/grip-torque", {"torque_nm": 1.4})[0] == 200
+        assert request(base, "/api/arms/right/grip-torque", {"torque_nm": 0.7})[0] == 200
+        left.power(True)
+        right.power(True)
+        assert request(f"http://127.0.0.1:{left.port}", "/target", {"q": [0.1] * 6, "grip": 0.8})[0] == 200
+        wait_for(lambda: lrobot.torque == 1.4 and rrobot.torque == 0.7)
+        assert lrobot.torque == 1.4 and rrobot.torque == 0.7
+        assert request(base, "/api/arms/left/grip-torque", {"torque_nm": 1.7})[0] == 200
+        wait_for(lambda: lrobot.torque == 1.7)
+        assert rrobot.torque == 0.7
+        assert request(base, "/api/arms/left/grip-torque", {"torque_nm": 3})[0] == 400
+    finally:
+        page.close()
+        for node in (left, right):
+            node.power(False)
+            node.close()
