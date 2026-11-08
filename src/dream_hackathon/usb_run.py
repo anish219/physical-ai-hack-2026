@@ -42,8 +42,8 @@ class ControllerAPI:
         self.request('/api/dream/right/connect', {})
         while True:
             state = self.state()['dream']['right']
-            if state.get('observation_error') or state.get('error'):
-                raise RuntimeError(state.get('observation_error') or state['error'])
+            if state.get('observation_error'):
+                raise RuntimeError(state['observation_error'])
             if state.get('observation') is not None:
                 break
             time.sleep(self.poll_seconds)

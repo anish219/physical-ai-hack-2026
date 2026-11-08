@@ -4,6 +4,9 @@ Work is published on `codex/scripted-usb-insertion` in
 `anish219/physical-ai-hack-2026`. This implementation is standalone and does not
 require a browser. The grabbing/approach policy remains separate.
 
+For one command that moves to the start pose, starts the policy and then runs
+this visual handoff, use [run_usb_insertion.md](run_usb_insertion.md).
+
 ## Current behavior
 
 1. Watch fresh right-wrist images while the grabbing policy approaches.
