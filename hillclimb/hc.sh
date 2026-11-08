@@ -39,7 +39,7 @@ case "$1" in
   start) ensure || exit 1
          st=$(curl -s -m 2 $U/api/state | field '["left"]["state"]')
          case "$st" in IDLE|END) ;; *) echo "a round is already running ($st): not starting another; hc.sh stop first"; exit 3 ;; esac
-         post /left/arm "${2:-{\"backend\":\"scripted\",\"mode\":\"match\",\"drive\":\"auto\",\"round_s\":300,\"max_goal\":9,\"crunch_at_s\":60,\"crunch_goal\":7,\"freeze_s\":20\}}" || exit 4
+         post /left/arm "${2:-{\"backend\":\"scripted\",\"mode\":\"match\",\"drive\":\"auto\",\"round_s\":300,\"max_goal\":6,\"crunch_at_s\":60,\"crunch_goal\":6,\"freeze_s\":20\}}" || exit 4
          post /left/go || exit 4 ;;
   stop) post /left/stop ;;
   status) version; echo; curl -s -m 2 $U/api/state | field '["left"]["state"]' ;;
