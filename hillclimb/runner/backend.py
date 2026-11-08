@@ -125,7 +125,7 @@ class RunnerBackend:
                 groups.append([k])
         return sorted([g for g in groups if len(g) >= 2], key=len, reverse=True)
 
-    def _plan(self, budget=40.0):
+    def _plan(self, budget=20.0):  # 40 s held the first pick 44 s after the looks (Nov 8 13:56)
         t = self.t
         stacks = self._stacks()
         # the runner's own records of raised places (the looks read tall tops poorly): those columns are towers too
@@ -160,7 +160,9 @@ class RunnerBackend:
                 and k not in in_stacks and b.get("iou", 0) >= 0.5 and b["x"] >= 0.15]
         order = sorted(left, key=lambda k: (bool(t.belief[k].get("lying")), -T.bot(t.belief[k])))
         t.dr = {"carry_z": 0.15, "over_dz": 0.01}
-        t.spot_area = ((0.19, 0.29), (-0.12, 0.15))
+        # the tower area, biased left (+y, image-left on the overhead): the blocks refused on Nov 8 sat at y < -15 cm,
+        # toward the strip, and a base there put the tower in their routes. TOWER_Y_MIN (m) overrides the left bias.
+        t.spot_area = ((0.19, 0.29), (float(os.environ.get("TOWER_Y_MIN", "-0.03")), 0.15))
         res = t.best_sequence(order, tuple(self.tower), budget=budget)
         if res is None:
             raise D.Fatal(f"no tower spot plans: {dict(t.why)}")
@@ -178,8 +180,21 @@ class RunnerBackend:
         only when the arm really sits in the folded rest. Every route and sweep check still applies."""
         s = D.arm_state()
         q = s.get("q") or []
-        if len(q) < 4 or max(abs(a - b) for a, b in zip(q[1:4], self.FOLDED_REST[1:4])) > 0.15:
+        if len(q) < 4 or max(abs(a - b) for a, b in zip(q[1:4], self.FOLDED_REST[1:4])) > 0.30:  # 0.15 missed a slumped rest (Nov 8 14:26)
             return
+        if max(abs(a - b) for a, b in zip(q[1:4], self.FOLDED_REST[1:4])) > 0.05:
+            # a slumped rest (Nov 8 14:29: shoulder -2.16, elbow 1.55): every check refuses the first move out of it
+            # ("camera rolled under" at 0%), so first a small joint move back to the exact folded rest, curled at the base
+            body = {"q": [float(v) for v in self.FOLDED_REST], "grip": float(s.get("goal_grip") or s.get("grip") or 0.8), "rate": 0.3}
+            req = urllib.request.Request(O.URL + "/move", json.dumps(body).encode(), {"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=3).read()
+            t_end = _wall.time() + 8.0
+            while _wall.time() < t_end:
+                _wall.sleep(0.3)
+                q = D.arm_state().get("q") or q
+                if max(abs(a - b) for a, b in zip(q[:4], self.FOLDED_REST[:4])) < 0.04:
+                    break
+            self._note(ok=True, what="rest_reset", why="slumped rest moved back to the folded rest", q=[round(v, 3) for v in q])
         real = D.arm_state
 
         def with_start(*a, **k):
@@ -214,7 +229,11 @@ class RunnerBackend:
             if held is not None and not held.get("ok"):
                 return self._note(ok=False, what="prepare", why=held["why"])
             self._unfold_from_rest()
+            # a re-look renames the blocks: the tower is found again by where it stands (this round's placement records,
+            # or a standing stack), never by the old names (Nov 8 13:59: "blue#1" became another block 30 cm away)
+            self.tower, self.moves = [], []
             t.multi_look(None)
+            self._tower_from_records(t)
             T.do_scatter_setup(t)
             t.tower_ids = set(sum(t.scatter_list, []))
             n = self._plan()
@@ -222,6 +241,42 @@ class RunnerBackend:
             return self._note(ok=True, what="prepare", planned_moves=n, spot=self.spot, blocks=sorted(t.belief))
         except BaseException as e:  # noqa: BLE001
             return self._fail("prepare", e)
+
+    def _tower_from_records(self, t):
+        """After a look, the blocks this round placed come back from the placement records at their exact spots: the
+        looks read a tall tower's upper blocks as ghosts about 10 cm off at table level. Sightings within 4 cm of a
+        recorded column are dropped (the records win); same-colour sightings within 13 cm of a column taller than one
+        block are dropped as ghosts (losing a real loose block there is the safe side)."""
+        try:
+            known = T.world_from_records()
+        except Exception:  # noqa: BLE001
+            return
+        up = {k: b for k, b in known.items() if T.bot(b) > T.TABLE_Z + 0.005}
+        if not up:
+            return
+        under = {k: b for k, b in known.items() if k not in up and any(math.hypot(b["x"] - o["x"], b["y"] - o["y"]) < 0.03 for o in up.values())}
+        tower = {**under, **up}
+        cols = []
+        for b in tower.values():
+            for c in cols:
+                if math.hypot(b["x"] - c[0], b["y"] - c[1]) < 0.03:
+                    c[2].add(T.colour_of(next(k for k, v in tower.items() if v is b)))
+                    break
+            else:
+                cols.append([b["x"], b["y"], {T.colour_of(next(k for k, v in tower.items() if v is b))}])
+        dropped = []
+        for k, b in list(t.belief.items()):
+            for cx, cy, colours in cols:
+                d = math.hypot(b["x"] - cx, b["y"] - cy)
+                if d < 0.04 or (d < 0.13 and T.colour_of(k) in colours):
+                    dropped.append(k)
+                    t.belief.pop(k)
+                    break
+        for i, (k, b) in enumerate(sorted(tower.items(), key=lambda kv: T.bot(kv[1]))):
+            t.belief[f"{T.colour_of(k)}#t{i + 1}"] = dict(b)
+        t.put_blocks()
+        self._note(ok=True, what="tower_from_records", tower=[f"{T.colour_of(k)}#t{i + 1}" for i, k in enumerate(sorted(tower, key=lambda kk: T.bot(tower[kk])))],
+                   dropped=dropped)
 
     def set_down_held(self, dry=False):
         """A block held at the start (grip_holding, or grip and goal_grip both under 0.75): the runner's own set-back
@@ -232,6 +287,17 @@ class RunnerBackend:
         import numpy as np
         st = O.arm_state()
         if not (st.get("grip_holding") or (st["grip"] < 0.75 and st["goal_grip"] < 0.75)):
+            return None
+        torque = st.get("grip_measured_torque_nm")
+        if not st.get("grip_holding") and torque is not None and abs(float(torque)) < 0.3:
+            # closed jaws but the grip force sensor feels nothing (Nov 8 14:18: jaws at 0.39, empty, round refused):
+            # open the jaws where they are, nothing else moves
+            if not dry:
+                req = urllib.request.Request(O.URL + "/move", json.dumps({"q": [float(v) for v in st["q"]], "grip": 0.85, "rate": 0.3}).encode(),
+                                             {"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=3).read()
+                _wall.sleep(1.0)
+            self._note(ok=True, what="set_down_held", why=f"jaws closed but empty (grip torque {float(torque):.2f} N m): opened in place")
             return None
         t = self.t
         bid = "held#1"

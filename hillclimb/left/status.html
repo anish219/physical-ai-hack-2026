@@ -163,9 +163,9 @@ async function tick(){
   const L = d.left || {}, G = d.gate || {}; S = L.settings || {};
   if (!settingsLoaded && L.settings) { const s = Object.assign({}, L.settings); delete s.gate_bypass; $("settings").value = JSON.stringify(s, null, 1); $("bypass").checked = !!L.settings.gate_bypass; bypassChanged(); settingsLoaded = true; $("toast").textContent = ""; }
   const bypass = !!(S.gate_bypass && S.mode === "practice");
-  const running = !["IDLE","END",undefined].includes(L.state);
-  $("bypass").disabled = running;
-  if (running) { $("bypass").checked = bypass; $("bypass_lbl").classList.toggle("on", bypass);
+  const roundRunning = !["IDLE","END",undefined].includes(L.state);
+  $("bypass").disabled = roundRunning;
+  if (roundRunning) { $("bypass").checked = bypass; $("bypass_lbl").classList.toggle("on", bypass);
     $("bypass_txt").textContent = bypass ? "This round: practice, USB gate skipped" : "This round: match, waits for the USB gate"; }
   else { $("bypass_txt").textContent = "Next Start: practice, skip the USB gate"; }
   $("p_mode").textContent = S.mode || "?"; $("p_backend").textContent = S.backend || "?";

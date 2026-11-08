@@ -125,8 +125,9 @@ class LeftController:
             self._gate_file(False)
             self._set("IDLE", "armed")
             self.backend = self._make_backend()
-            if new.mode == "match" and hasattr(self.backend, "table_reset"):
-                # a new match starts on a table the judges reset: towers from earlier rounds are no longer there
+            if hasattr(self.backend, "table_reset"):
+                # every round starts on a table people reset (judges in a match, the team in practice): towers in the
+                # records from earlier rounds are no longer there (Nov 8 14:25: a practice round adopted a gone tower)
                 self._safe(lambda: self.backend.table_reset("match round armed"))
             self.log.write("arm", settings=dataclasses.asdict(new))
             self._save(force=True)
@@ -329,7 +330,8 @@ class LeftController:
                 elif s.drive == "auto":
                     self._start_job("place", lambda: self.backend.place_next(self._scene(), max(1.0, min(s.step_timeout_s, tl - s.freeze_s))))
             elif st == "REST":
-                if len(self.tower) < self.active_goal() and tl > s.freeze_s:
+                rested = self.clock() - getattr(self, "_exhausted_at", -1e9)
+                if len(self.tower) < self.active_goal() and tl > s.freeze_s and rested >= 40.0:
                     self._set("STACK", "below goal")
                 elif self.clock() - self.last_rest_check >= s.rest_check_s:
                     self.last_rest_check = self.clock()
@@ -434,10 +436,23 @@ class LeftController:
             self.last_step = {**res, "counted": False}
             self.log.write("step", **self.last_step)
             return out
+        if kind == "prepare" and res.get("ok") and isinstance(getattr(self.backend, "tower", None), list) and self.backend.tower:
+            # a tower adopted by the plan (a restart mid-round): the count follows it
+            self.tower = [{"id": b, "t": round(self.clock(), 2), "level": i + 1} for i, b in enumerate(self.backend.tower)]
         if kind in ("prepare", "retreat"):
             self.last_step = {k: v for k, v in res.items()}
             if not res.get("ok", True) and res.get("raised"):
                 self.health[f"{kind}_error"] = res.get("why")
+            return out
+        why = str(res.get("why") or "")
+        if kind == "place" and not res.get("raised") and ("nothing left that plans" in why or "no moves planned" in why):
+            # every block left is out of reach: rest (it looks again every 40 s), never a fault loop
+            self.last_step = {**res, "counted": False}
+            self._exhausted_at = self.clock()
+            if hasattr(self.backend, "prepared"):
+                self.backend.prepared = False
+            self._set("REST", "no block left that the arm can reach; looking again every 40 s")
+            self.log.write("step", **self.last_step)
             return out
         if res.get("raised") or not res.get("ok"):
             self.faults += 1
@@ -508,8 +523,8 @@ class LeftController:
             self._set("REST" if len(self.tower) >= self.active_goal() else "STACK", "settled")
 
     def _check_fall(self) -> None:
-        if not self.settings.vision_confirm:
-            return
+        if not self.settings.vision_confirm or not self.tower:
+            return  # nothing counted, nothing can fall (Nov 8 14:31: "no tower standing" with 0 blocks sent it to RECOVER)
         ans = vision.tower_standing(self._frames(), len(self.tower))
         if ans is None:
             return

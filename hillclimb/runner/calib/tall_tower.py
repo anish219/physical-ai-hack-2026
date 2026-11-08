@@ -710,15 +710,28 @@ class Tall(D.Loop):
         near = [np.abs(np.array(s0["q"]) - np.array(s0[k])).max() for k in ("start_joints", "zero_joints") if s0.get(k)]
         if near and min(near) < 0.15:
             return  # folded at rest: the look move unfolds it under the home rules
-        up = Plan(self.op, q0, 0.08)
+        from hillclimb.runner.calib import tower_safety as TS
+        keep = TS.TABLE_CLEAR_LINKS
         try:
-            up.to([p0[0], p0[1], min(p0[2] + 0.06, 0.19)], yaw0, 0.25, "straight up", line=0.01)
-            up.check()
-        except SystemExit as e:
-            D.status(f"session start: no straight-up move from {p0[2] * 1000:.0f} mm ({str(e)[:120]}); the look move's own sweep decides")
-            return
-        D.status(f"session start: fingertips at {p0[2] * 1000:.0f} mm, going straight up first")
-        self.go(up, float(np.clip(s0["goal_grip"], 0.0, 1.0)), "straight up", "up")
+            for relaxed in (False, True):
+                # a start a few mm under the links' table margin (model error after a stop low at the table: Nov 8 14:20,
+                # "arm -5 mm over the table") refuses every move; the straight-up escape alone gets a 3 cm margin
+                if relaxed:
+                    TS.TABLE_CLEAR_LINKS = -0.03
+                up = Plan(self.op, q0, 0.08)
+                try:
+                    up.to([p0[0], p0[1], min(p0[2] + 0.08, 0.19)], yaw0, 0.25, "straight up", line=0.01)
+                    up.check()
+                except SystemExit as e:
+                    if not relaxed and "over the table" in str(e):
+                        continue
+                    D.status(f"session start: no straight-up move from {p0[2] * 1000:.0f} mm ({str(e)[:120]}); the look move's own sweep decides")
+                    return
+                D.status(f"session start: fingertips at {p0[2] * 1000:.0f} mm, going straight up first{' (low start: table margin relaxed for this move)' if relaxed else ''}")
+                self.go(up, float(np.clip(s0["goal_grip"], 0.0, 1.0)), "straight up", "up")
+                return
+        finally:
+            TS.TABLE_CLEAR_LINKS = keep
 
     def look_all(self, tag, tip=LOOK_TIP, move=True, vet=True):
         if move:

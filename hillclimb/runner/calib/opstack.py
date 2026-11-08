@@ -50,7 +50,7 @@ TEAM = "http://127.0.0.1:18081/api/state"
 DREAM = "http://127.0.0.1:18084/api/state"
 TABLE_Z = -0.008
 MAX_RATE = 0.3
-TIP_Y_MIN = -0.15
+TIP_Y_MIN = -0.20  # -0.15 refused orange at y -154 mm (Nov 8 14:24); the strip and right arm sit past y -35 cm
 CYAN, AMBER = (255, 224, 63), (40, 170, 245)
 COLOURS = ("green", "blue", "purple")
 
@@ -597,6 +597,32 @@ class Plan:
                 self.nodes += [(qq, v, tag) for qq in nodes]
                 self.R = R1
                 return
+        # an escape waypoint (Nov 8 14:24: blocks 36-45 cm out refused because the move left from over a 4-high tower,
+        # so the tower's floor held over the whole straight path, too high that far out): rise to the floor, go along
+        # the line until clear of every tall stack's RULE_NEAR, then the rest under the lower floor out there.
+        # rule_check still judges the whole path.
+        if not getattr(self, "_escaping", False) and len(stacks):
+            d = xyz[:2] - p0[:2]
+            L = float(np.linalg.norm(d))
+            tall = stacks[stacks[:, 2] > TABLE_Z + H + 0.01]  # 2 or more high: a lone block's floor is low anyway
+            if L > 0.05 and len(tall):
+                for s_ in np.linspace(0.1, 0.8, 15):
+                    w = p0[:2] + d * s_
+                    if float(np.min(np.linalg.norm(tall[:, :2] - w, axis=1))) <= RULE_NEAR + 0.01:
+                        continue
+                    n0, R_keep = len(self.nodes), self.R
+                    self._escaping = True
+                    try:
+                        self.route([float(w[0]), float(w[1]), float(min(max(floor, p0[2]), RULE_REACH))], yaw_deg, v, tag + " escape", keep)
+                        self.route(xyz, yaw_deg, v, tag, keep)
+                        return
+                    except SystemExit as e2:
+                        del self.nodes[n0:]
+                        self.R = R_keep
+                        why += f"; escape at {s_:.2f}: {str(e2)[:80]}"
+                        break
+                    finally:
+                        self._escaping = False
         raise SystemExit(f"no rule route to fingertips {np.round(xyz * 1000).tolist()} yaw {yaw_deg:.0f} ({tag}): {why}")
 
     def rule_check(self):
