@@ -88,15 +88,18 @@ async function action(path, body = {}) {
 function renderSelections() {
   const inputs = station.inputs || {}, both = station.combined_input;
   for (const side of ['left', 'right']) {
-    for (const source of ['dream', 'so101']) {
+    for (const source of ['dream', 'so101', 'sequence']) {
       $(side + '-input-' + source).setAttribute('aria-pressed', String(!both && inputs[side] === source));
     }
   }
   $('both-input-dream').setAttribute('aria-pressed', String(both === 'dream'));
+  $('both-input-sequence').setAttribute('aria-pressed', String(both === 'sequence'));
   $('so101-panel').hidden = !Object.values(inputs).includes('so101');
   for (const selection of selections) {
     $('api-' + selection + '-panel').hidden = selection === 'both' ? both !== 'dream' :
       !!both || inputs[selection] !== 'dream';
+    $('sequence-' + selection + '-panel').hidden = selection === 'both' ? both !== 'sequence' :
+      !!both || inputs[selection] !== 'sequence';
   }
   const count = document.querySelectorAll('#input-panels > article:not([hidden])').length;
   $('input-panels').hidden = count === 0;
@@ -150,6 +153,7 @@ function render(state) {
   $('record-status').textContent = [state.recording ? 'Recording · ' + state.frames + ' frames' : state.saved_episodes + ' saved examples',
     state.dataset_dir, state.recording_error].filter(Boolean).join(' · ');
   renderSelections();
+  if (window.renderSequenceState) window.renderSequenceState(state.sequences);
 }
 
 for (const side of ['left', 'right']) {
@@ -162,13 +166,14 @@ for (const side of ['left', 'right']) {
     await action('/api/arms/' + side + '/grip-torque', {torque_nm: Number($(side + '-grip-torque').value)});
     gripDragging[side] = false; render(station);
   };
-  for (const source of ['dream', 'so101']) {
+  for (const source of ['dream', 'so101', 'sequence']) {
     $(side + '-input-' + source).onclick = () => action('/api/arms/' + side + '/input', {
       source: !station.combined_input && station.inputs[side] === source ? null : source
     });
   }
 }
 $('both-input-dream').onclick = () => action('/api/both/input', {source: station.combined_input === 'dream' ? null : 'dream'});
+$('both-input-sequence').onclick = () => action('/api/both/input', {source: station.combined_input === 'sequence' ? null : 'sequence'});
 $('track').onclick = () => action('/api/control', {tracking: true});
 $('untrack').onclick = () => action('/api/control', {tracking: false});
 $('record').onclick = () => action('/api/control', {recording_requested: !station.recording_requested});
@@ -188,6 +193,7 @@ events.onmessage = message => {
   if (event.type === 'selection') {
     station.inputs = event.inputs; station.combined_input = event.combined_input; renderSelections();
   }
+  if (event.type === 'sequences' && window.renderSequenceState) window.renderSequenceState(event.sequences);
 };
 async function poll() {
   try {

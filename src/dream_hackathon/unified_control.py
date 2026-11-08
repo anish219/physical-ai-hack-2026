@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dream_hackathon.armserver import ArmBinding, CameraHub
 from dream_hackathon.remote_arm import call
+from dream_hackathon.sequences import SequenceManager
 from dream_hackathon.so101_dashboard import Controls
 
 
@@ -191,7 +192,7 @@ class DreamCallerProxy:
 
 
 class UnifiedController:
-    def __init__(self, nodes, leader, callers=None):
+    def __init__(self, nodes, leader, callers=None, *, sequence_path=None):
         self.nodes, self.leader = nodes, leader
         self.callers = callers or {}
         self.inputs = {side: "so101" if leader.side == side else None for side in nodes}
@@ -204,6 +205,7 @@ class UnifiedController:
             side: {"task": "", "checkpoint": "dreamlabs/dream-1-beta", "revision": 0}
             for side in ("left", "right", "both")
         }
+        self.sequences = SequenceManager(self.callers, nodes, self.publish, sequence_path)
 
     def shared_state(self):
         with self.shared_lock:
@@ -244,12 +246,14 @@ class UnifiedController:
         state["inputs"] = dict(self.inputs)
         state["combined_input"] = self.combined_input
         state.update(self.shared_state())
+        state["sequences"] = self.sequences.snapshot()
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
             state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]
         return state
 
     def pause(self, sides):
+        self.sequences.stop_sides(sides)
         for caller in self.callers.values():
             if set(sides).intersection(caller.sides):
                 caller.cancel_playback()
@@ -262,8 +266,8 @@ class UnifiedController:
                 self.nodes[side].control.post("/stop", {})
 
     def select_input(self, side, source):
-        if side not in self.nodes or source not in (None, "so101", "dream"):
-            raise ValueError("Choose SO-101, Dream API, or no input for an arm")
+        if side not in self.nodes or source not in (None, "so101", "dream", "sequence"):
+            raise ValueError("Choose SO-101, Dream API, Sequences, or no input for an arm")
         with self.input_lock:
             if self.combined_input is not None:
                 self.pause(list(self.nodes))
@@ -286,8 +290,8 @@ class UnifiedController:
             return self.state()
 
     def select_both(self, source):
-        if source not in (None, "dream"):
-            raise ValueError("Both supports Dream API; Full Auto Control is not available yet")
+        if source not in (None, "dream", "sequence"):
+            raise ValueError("Both supports Dream API and Sequences; Full Auto Control is not available yet")
         with self.input_lock:
             if source == self.combined_input:
                 return self.state()
@@ -357,12 +361,36 @@ class UnifiedController:
             else:
                 raise ValueError("Unknown Dream API action")
 
+    def sequence_action(self, selection, action, body):
+        if selection not in self.sequences.runs:
+            raise ValueError("Choose left, right, or both for Sequences")
+        with self.input_lock:
+            if action == "save":
+                self.sequences.update(selection, body.get("definition"))
+            elif action == "stop":
+                self.sequences.runs[selection].stop()
+            elif action == "run":
+                selected = (
+                    self.combined_input == "sequence"
+                    if selection == "both"
+                    else (self.combined_input is None and self.inputs[selection] == "sequence")
+                )
+                if not selected:
+                    raise ValueError("Select Sequences as the input for this arm selection")
+                if self.sequences.runs[selection].snapshot()["busy"]:
+                    raise ValueError("This sequence is already running or finishing a call")
+                self.pause(self.sequences.runs[selection].sides)
+                self.sequences.start(selection)
+            else:
+                raise ValueError("Unknown sequence action")
+
     def power(self, side, enabled):
         if side not in self.nodes:
             raise ValueError("Unknown arm")
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be true or false")
         if not enabled:
+            self.sequences.stop_sides([side])
             # An explicit arm-off also cancels playback for that arm, including a pending API reply.
             for caller in self.callers.values():
                 if side in caller.sides:
@@ -397,10 +425,12 @@ class UnifiedPage:
             def do_GET(self):  # noqa: N802
                 if self.path == "/":
                     self.reply(200, PAGE.encode(), "text/html; charset=utf-8")
-                elif self.path == "/controller.js":
+                elif self.path in ("/controller.js", "/sequences.js"):
                     self.reply(
                         200,
-                        pathlib.Path(__file__).with_name("unified_control.js").read_bytes(),
+                        pathlib.Path(__file__)
+                        .with_name("unified_control.js" if self.path == "/controller.js" else "sequences.js")
+                        .read_bytes(),
                         "text/javascript; charset=utf-8",
                     )
                 elif self.path == "/api/state":
@@ -410,6 +440,7 @@ class UnifiedPage:
                     with controller.shared_lock:
                         controller.listeners.add(listener)
                         listener.put({"type": "drafts", **controller.shared_state()})
+                        listener.put({"type": "sequences", "sequences": controller.sequences.snapshot()})
                     try:
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
@@ -482,6 +513,14 @@ class UnifiedPage:
                             self.reply(200, json.dumps(event).encode())
                             return
                         controller.dream_action(parts[2], parts[3], body)
+                    elif self.path.startswith("/api/sequences/"):
+                        parts = self.path.strip("/").split("/")
+                        if len(parts) != 4:
+                            raise ValueError("Choose a sequence and action")
+                        controller.sequence_action(parts[2], parts[3], body)
+                        if parts[3] == "save":
+                            self.reply(200, json.dumps({"sequences": controller.sequences.snapshot()}).encode())
+                            return
                     elif self.path in ("/api/arms/left/power", "/api/arms/right/power"):
                         controller.power(self.path.split("/")[3], body.get("enabled"))
                     elif self.path == "/api/home":
@@ -511,6 +550,7 @@ class UnifiedPage:
 
     def close(self):
         self.closed.set()
+        self.controller.sequences.close()
         self.controller.publish(None)
         self.server.shutdown()
         self.server.server_close()
@@ -534,6 +574,9 @@ def main(argv=None):
     parser.add_argument("--dream-port", type=int, default=8084)
     parser.add_argument("--dream-python", type=pathlib.Path, default=pathlib.Path("~/dream-env/bin/python"))
     parser.add_argument("--dataset-dir", type=pathlib.Path)
+    parser.add_argument(
+        "--sequence-file", type=pathlib.Path, default=pathlib.Path("~/.cache/dream_hackathon/sequences.json")
+    )
     parser.add_argument("--enable", nargs="*", choices=("left", "right"), default=[])
     parser.add_argument("--translation-scale", type=float, default=1.0)
     parser.add_argument("--gripper-hold-torque-nm", type=float, default=0.5)
@@ -564,7 +607,8 @@ def main(argv=None):
         )
         dream = DreamService(args.dream_python.expanduser(), urls, args.dream_port)
         callers = {selection: DreamCallerProxy(dream, selection) for selection in ("left", "right", "both")}
-        page = UnifiedPage(UnifiedController(nodes, leader, callers), args.port)
+        controller = UnifiedController(nodes, leader, callers, sequence_path=args.sequence_file)
+        page = UnifiedPage(controller, args.port)
         try:
             print(f"Unified arm controller: http://127.0.0.1:{page.port}; SO-101 assignment: None", flush=True)
             for side in args.enable:
@@ -574,6 +618,7 @@ def main(argv=None):
         except KeyboardInterrupt:
             pass
         finally:
+            controller.sequences.close()
             dream.close()
             leader.close()
             page.close()

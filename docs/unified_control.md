@@ -13,7 +13,7 @@ disables only that arm's motor torque without homing. It does not switch the
 physical electrical supply. Errors remain visible on the corresponding arm card.
 An arm's startup or shutdown does not hold the other arm's request or motor mutex.
 
-Each arm card has input buttons for **Dream API**, **SO-101**, and the disabled
+Each arm card has input buttons for **Dream API**, **SO-101**, **Sequences**, and the disabled
 **Full Auto Control** placeholder. Clicking the active input deselects it; neither
 arm needs an input. SO-101 can be assigned to only one arm: selecting it on Left
 releases Right, and vice versa. Selecting Dream API separately on Left and Right
@@ -22,6 +22,8 @@ The **Both arms** controls between the arm cards select a combined Dream API
 session instead. Both clears the individual inputs; choosing an individual input
 clears Both. The combined panel uses all three cameras and both live arm poses.
 Both has a matching disabled Full Auto placeholder, and no SO-101 option.
+Sequences follows the same selection rules: separate Left and Right buttons
+open independent editors, while the center Both button opens one combined editor.
 Changing input cancels affected API playback (including pending replies) and
 releases the previous leader before the new source can command the arm.
 
@@ -96,6 +98,43 @@ independent caller. API errors appear in the API panel and are not retried.
 The existing Dream API key is loaded server-side from the existing credentials or
 environment. No key is entered or displayed in the page. The observation panel
 shows pre-SDK state; Dream adds EEF poses and maps camera roles for the checkpoint.
+
+## Sequences
+
+The sequence editor was pulled from NUCK-1's unpushed `/home/pah/leonard-dashboard`
+code. Its original bridge and editor are preserved in `vendor/leonard_sequences`,
+and the original service at port 8094 is left intact. That legacy interface is
+not shown on the main page. It can still be launched independently as documented
+in the preserved README and SOURCE.txt.
+
+Select **Sequences** under Left, Right, or Both to show a matching control panel.
+Add phases and nested subphases. Each subphase is either a **Dream task** with a
+prompt, checkpoint and action window (1–300 seconds), or a **Wait / checkpoint**
+(0–300 seconds). Run walks the phases and subphases in their defined order; Stop
+cancels the current action and prevents later steps. Source changes, Return to 0
+and arm-off also cancel affected sequences. Left and Right can run independently;
+Both is one coordinated bimanual sequence and excludes individual inputs.
+
+The original timed semantics are retained: finishing a window does not verify
+task success. The older browser-side completion/recovery prototype remains in the
+preserved source; no new success verifier or recovery behavior is enabled here.
+The unified scheduler runs server-side and uses the existing API workers, direct
+target transport, camera/dummy-pose layout and per-arm gripper settings. This
+extends the legacy right-only Dream steps to Left and Both without opening another
+CAN adapter or camera. Existing Dream credentials are used.
+
+Definitions are shared with connected browsers and stored in
+`~/.cache/dream_hackathon/sequences.json` (override with `--sequence-file`). Edits
+apply to the next explicit Run; an active sequence uses the definition captured
+at its start. The original defaults are retained: Right has an Unplug USB phase,
+Left starts empty, and the new Both definition starts empty. Existing plans saved
+in the legacy editor's browser storage remain there unchanged.
+
+The shared backend accepts `POST /api/sequences/{left|right|both}/save` with
+`{"definition":{"phases":[...]}}`, plus `/run` and `/stop` with an empty object.
+Sequence state, current phase/subphase and errors appear in `/api/state` and the
+existing `/api/events` stream. Sequence data and the original backend source are
+not used as instructions to start hardware automatically.
 
 ## Ownership and processes
 

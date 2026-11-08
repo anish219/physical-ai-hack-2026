@@ -25,6 +25,15 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 .spaced{margin-top:12px}.error{color:#ffb4ac;white-space:pre-line;min-height:20px}pre{font-size:11px;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .cameras{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:20px 0}.cameras img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#101315;border-radius:8px}
 .cameras figcaption{font-size:11px;color:#a5afb8;margin-top:6px}figure{margin:0}
+.sequence-phase{margin:16px 0;padding:14px;border:1px solid #46535d;border-radius:10px}
+.sequence-row{display:flex;gap:8px;align-items:center}.sequence-row input{min-width:0;flex:1}
+.sequence-step{margin:14px 0;padding:12px;border-left:3px solid #46535d;background:#12191d;border-radius:5px}
+.sequence-step.active{border-color:#b5f2cb}.sequence-step.complete{border-color:#67977a}
+.sequence-step label{margin-top:12px}.sequence-row select{width:auto;max-width:50%}
+.sequence-step textarea{width:100%;margin-top:10px;min-height:85px}.sequence-row button{padding:9px}
+.sequence-options{display:grid;grid-template-columns:minmax(0,1fr)100px;gap:10px}
+.sequence-options input{width:100%;padding:9px;background:#10171b;color:#edf0f3;border:1px solid #46535d;border-radius:8px}
+.sequence-editor input{cursor:text}.sequence-progress{margin:14px 0;color:#b5f2cb}
 @media(max-width:720px){body{padding:16px}.grid,.arm-grid{grid-template-columns:1fr}.cameras{gap:6px}.card{padding:18px}}
 </style></head><body><main>
 <header><div><span class="eyebrow">NUCK-1 · Metal arms</span><h1>Station control</h1></div><span class="badge" id="connection">Connecting</span></header>
@@ -33,17 +42,20 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <div class="actions"><button class="power" id="left-power">Turn on</button><button id="left-home">Return to 0</button><button id="left-zero">Set 0</button></div>
 <p class="zero-note" id="left-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="left-input-dream" aria-pressed="false">Dream API</button><button id="left-input-so101" aria-pressed="false">SO-101</button>
+<button id="left-input-sequence" aria-pressed="false">Sequences</button>
 <button id="left-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
 <label for="left-grip-torque">Gripper holding torque <output id="left-grip-value">—</output></label>
 <input id="left-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
 <div class="feedback" id="left-grip-feedback"></div><p class="status" id="left-status"></p></article>
 <article class="card both-card" id="both-arms"><h2>Both arms</h2><div class="inputs">
 <button id="both-input-dream" aria-pressed="false">Dream API</button>
+<button id="both-input-sequence" aria-pressed="false">Sequences</button>
 <button id="both-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div></article>
 <article class="card" id="right-arm"><div class="card-title"><h2>Right arm</h2><span class="badge" id="right-power-state">OFF</span></div>
 <div class="actions"><button class="power" id="right-power">Turn on</button><button id="right-home">Return to 0</button><button id="right-zero">Set 0</button></div>
 <p class="zero-note" id="right-zero-note">Zero not set</p><h3>Input</h3><div class="inputs">
 <button id="right-input-dream" aria-pressed="false">Dream API</button><button id="right-input-so101" aria-pressed="false">SO-101</button>
+<button id="right-input-sequence" aria-pressed="false">Sequences</button>
 <button id="right-input-auto" disabled>Full Auto Control <small>Coming later</small></button></div>
 <label for="right-grip-torque">Gripper holding torque <output id="right-grip-value">—</output></label>
 <input id="right-grip-torque" type="range" min="0.1" max="2" step="0.05" value="1">
@@ -65,6 +77,9 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <article class="card" id="api-left-panel" hidden></article>
 <article class="card" id="api-right-panel" hidden></article>
 <article class="card" id="api-both-panel" hidden></article>
+<article class="card" id="sequence-left-panel" hidden></article>
+<article class="card" id="sequence-right-panel" hidden></article>
+<article class="card" id="sequence-both-panel" hidden></article>
 </section><p class="error" id="message" role="status"></p>
 <template id="api-panel-template">
 <p class="panel-label">Model input</p><h2 data-field="title"></h2>
@@ -76,4 +91,13 @@ output{float:right;color:#b5f2cb}textarea{resize:vertical}.feedback{font-size:12
 <p data-field="status">Not connected</p><p class="error" data-field="error"></p>
 <details><summary>Observation and prediction</summary><pre data-field="result"></pre></details>
 </template>
-</main><script src="/controller.js"></script></body></html>
+<template id="sequence-panel-template">
+<p class="panel-label">Sequence input</p><h2 data-sequence-field="title"></h2>
+<p>Phases run in order. Dream and wait subphases advance when their timers finish. Edits apply to the next run.</p>
+<div class="actions"><button data-sequence-field="run">Run sequence</button><button data-sequence-field="stop">Stop sequence</button></div>
+<p class="sequence-progress" data-sequence-field="status">Idle</p>
+<div class="sequence-editor" data-sequence-field="editor"></div>
+<button data-sequence-field="add-phase">+ Add phase</button>
+<p class="feedback" data-sequence-field="saved">Shared sequence</p><p class="error" data-sequence-field="error"></p>
+</template>
+</main><script src="/controller.js"></script><script src="/sequences.js"></script></body></html>

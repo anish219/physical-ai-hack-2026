@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Leonard · Arm orchestrator</title><link rel="stylesheet" href="style.css"></head>
+<body><header><div class="header-identity"><a class="brand" href="./">◈ <b>leonard</b><span>/ arm orchestrator</span></a><span id="status" class="pill">Ready</span></div><div id="run-summary" class="small"></div></header>
+<main>
+<section class="panel motors" aria-label="Arm telemetry in degrees"><div class="arm-grid" id="arms"></div></section>
+<section class="panel camera-panel" aria-label="Camera views"><div class="cameras" id="cameras"></div></section>
+<section class="panel sequence-builder"><div class="section-title"><h2>Arm sequences</h2><span>Separate ordered phases · each subphase runs for its configured window · saved in this browser</span></div><div id="sequences" class="sequence-grid"></div></section>
+<section class="panel activity-panel"><div class="section-title"><h2>Activity</h2><span id="bridge-message" class="small">Local sequence editor · robot bridge disconnected</span></div><ol id="log" class="log" aria-live="polite"></ol></section>
+<footer>LEONARD / HACKATHON CONSOLE <span>Local dashboard · Dream actions require right-arm control</span></footer></main><script type="module" src="app.js"></script></body></html>

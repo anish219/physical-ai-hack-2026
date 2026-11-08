@@ -223,11 +223,18 @@ def test_page_contains_every_existing_leader_control_and_routes_to_selected_chil
             "api-both-panel",
             "both-input-dream",
             "both-input-auto",
+            "left-input-sequence",
+            "right-input-sequence",
+            "both-input-sequence",
+            "sequence-left-panel",
+            "sequence-right-panel",
+            "sequence-both-panel",
         ):
             assert f'id="{control}"'.encode() in html
         assert b'id="so101-panel" hidden' in html
         assert b'id="api-panel-template"' in html
         assert request(base, "/controller.js")[0] == 200
+        assert request(base, "/sequences.js")[0] == 200
         for path in ("/api/control", "/api/home", "/api/reject", "/api/kill"):
             assert request(base, path, {})[0] == 200
         assert [a[0] for a in actions] == ["/api/control", "/api/control", "home", "/api/reject", "/api/kill"]
@@ -508,6 +515,7 @@ def test_shared_api_drafts_stream_to_two_clients_and_run_uses_latest_text():
             urllib.request.urlopen(base + "/api/events", timeout=3) as second,
         ):
             assert event(first)["type"] == event(second)["type"] == "drafts"
+            assert event(first)["type"] == event(second)["type"] == "sequences"
             code, payload, _ = request(base, "/api/dream/left/draft", {"task": "pick u", "client_id": "one"})
             assert code == 200
             first_event, second_event = event(first), event(second)
