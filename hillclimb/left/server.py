@@ -5,7 +5,9 @@ Routes
   GET  /api/state              left controller + gate + health, one JSON
   GET  /cam/<overhead|left_wrist|right_wrist>.jpg   camera proxy (read-only)
   POST /left/arm               settings (JSON body), refused while a match round runs
-  POST /left/go | /left/stop | /left/estop
+  POST /left/go | /left/stop | /left/estop | /left/restart (stop, arm with {"settings": {...}} or the current ones, go)
+  GET  /api/right              read-only right arm view (newest /tmp/relay run, right arm server state)
+  GET  /api/timeline           last key events from the left and gate logs, newest first
   GET  /left/state             INTERFACES.md left state
   POST /left/stack_next        main-controller binding: one placement (drive must be "external")
   POST /left/rebuild           main-controller binding: recover and restack
@@ -17,6 +19,7 @@ Routes
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib
 import json
 import pathlib
@@ -44,6 +47,59 @@ def gate_module():
         except Exception as e:  # noqa: BLE001
             _gate_err = f"{type(e).__name__}: {e}"[:200]
     return _gate_mod
+
+
+def _tail(path: pathlib.Path, n: int) -> list[dict]:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 200000))
+            lines = f.read().decode("utf-8", "replace").splitlines()[-n:]
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def timeline(n: int = 15) -> list[dict]:
+    """The last key events from the left and gate logs, newest first, in plain words."""
+    log_dir = pathlib.Path(str(CFG.get("LOG_DIR", "."))).expanduser()
+    rows = []
+    for r in _tail(log_dir / "left.jsonl", 300):
+        ev = r.get("event")
+        if ev == "state":
+            rows.append((r.get("t", 0), f"left: {r.get('frm')} to {r.get('to')} ({r.get('why', '')})"))
+        elif ev == "step":
+            what = r.get("what") or r.get("kind") or "step"
+            rows.append((r.get("t", 0), f"left {what}: {'ok' if r.get('ok') else 'failed'}"
+                         f"{', placed ' + str(r.get('placed_id')) if r.get('placed_id') else ''}"
+                         f"{', tower ' + str(r.get('tower_count')) if r.get('tower_count') is not None else ''}"
+                         f"{': ' + str(r.get('why'))[:120] if r.get('why') else ''}"))
+        elif ev in ("arm", "resume", "tick_error", "stage2_passed"):
+            rows.append((r.get("t", 0), {"arm": "left: round armed", "resume": "left: server restarted, round resumed",
+                                         "tick_error": f"left error: {str(r.get('error'))[:120]}",
+                                         "stage2_passed": "left: stage 2 passed"}[ev]))
+    last_yes = None
+    for r in _tail(log_dir / "gate.jsonl", 600):
+        ev = r.get("event")
+        if ev == "gate_read":
+            yes = bool(r.get("yes"))
+            if yes != last_yes:
+                a = r.get("answer") or {}
+                rows.append((r.get("t", 0), f"USB {r.get('kind')} read now says {'YES' if yes else 'no'}"
+                             f" (plugged {a.get('plugged_ref')} to {a.get('plugged_now')}, gripper holding {a.get('gripper_holding_cable_now')})"))
+                last_yes = yes
+        elif ev in ("gate_armed", "gate_open", "gate_opened", "gate_latched", "gate_auto_disarmed", "socket_passed"):
+            rows.append((r.get("t", 0), {"gate_armed": "USB gate armed: reference photo taken",
+                                         "gate_auto_disarmed": "USB gate stopped reading (round over)",
+                                         "socket_passed": "socket check: a hub port emptied"}.get(ev, "USB GATE OPEN: cable unplugged and on the table")))
+    rows.sort(key=lambda x: x[0], reverse=True)
+    return [{"t": t, "text": text} for t, text in rows[:n]]
 
 
 def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
@@ -79,6 +135,17 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"known": False, "open": False, "error": repr(e)[:200]})
 
+        def _go(self, body):
+            ok, why = ctl.go()
+            gate = None
+            if ok and not (body or {}).get("keep_gate"):  # one Go: the gate takes its reference and resets its latch
+                g = gate_module()
+                try:
+                    gate = g.http_handler("POST", "/gate/arm", {})[1] if g is not None else {"error": "gate unavailable"}
+                except Exception as e:  # noqa: BLE001
+                    gate = {"error": repr(e)[:200]}
+            return ok, why, gate
+
         def do_GET(self):  # noqa: N802
             p = self.path.split("?")[0]
             try:
@@ -96,6 +163,11 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
                     if f is None:
                         return self._send(503, {"error": "camera unavailable"})
                     return self._send(200, raw=f[0], ctype="image/jpeg")
+                if p == "/api/right":
+                    from hillclimb.left import right_status
+                    return self._send(200, right_status.status())
+                if p == "/api/timeline":
+                    return self._send(200, {"events": timeline()})
                 if p == "/left/state":
                     return self._send(200, ctl.snapshot())
                 if p == "/left/verify_tower":
@@ -114,15 +186,19 @@ def make_handler(ctl: LeftController, cams: dict[str, tuple[ArmClient, str]]):
                     ok, why = ctl.arm_round(body)
                     return self._send(200 if ok else 409, {"ok": ok, "why": why})
                 if p == "/left/go":
-                    ok, why = ctl.go()
-                    gate = None
-                    if ok and not (body or {}).get("keep_gate"):  # one Go: the gate takes its reference and resets its latch
-                        g = gate_module()
-                        try:
-                            gate = g.http_handler("POST", "/gate/arm", {})[1] if g is not None else {"error": "gate unavailable"}
-                        except Exception as e:  # noqa: BLE001
-                            gate = {"error": repr(e)[:200]}
+                    ok, why, gate = self._go(body)
                     return self._send(200 if ok else 409, {"ok": ok, "why": why, "gate": gate})
+                if p == "/left/restart":  # stop, then arm with these (or the current) settings, then go: one call
+                    ctl.stop_round("restart")
+                    t_end = time.time() + 10
+                    while ctl.state not in ("END", "IDLE") and time.time() < t_end:
+                        time.sleep(0.1)
+                    cfg = (body or {}).get("settings") or dataclasses.asdict(ctl.settings)
+                    ok_a, why_a = ctl.arm_round(cfg)
+                    if not ok_a:
+                        return self._send(409, {"ok": False, "stop": "done", "arm": why_a})
+                    ok, why, gate = self._go(body)
+                    return self._send(200 if ok else 409, {"ok": ok, "stop": "done", "arm": why_a, "go": why, "gate": gate})
                 if p == "/left/stop":
                     ctl.stop_round()
                     return self._send(200, {"ok": True})

@@ -40,6 +40,7 @@ LINK_MARGIN, HAND_MARGIN = 0.020, 0.010
 SAME_TOWER = 0.04  # a place within 4 cm of a tower's centre is on that tower
 JAW_ADR = (6, 7)  # the jaw slides in the runner's model (0 to 50 mm each; pads 6.7 mm apart at 0)
 STEP = math.radians(1.5)
+ESCAPE_SLACK = 0.001  # an escaping path may let a point's clearance drop by at most this per step (m)
 
 # the tower(s) the current block may put the hand into (set by data_loop.Loop.block for the length of one block)
 ACTIVE: list[tuple[float, float]] = []
@@ -142,6 +143,11 @@ def check(op, nodes, tag, opening=0.095, active=None, hand=True):
     hand_on = hand
     worst = None
     seq = [nodes[0]] + list(nodes) if len(nodes) == 1 else list(nodes)
+    # escape: a path that STARTS inside a tower's margin (but outside the bare cylinder; after a stop mid-move, say)
+    # may move as long as no point's clearance to that tower drops by more than ESCAPE_SLACK per step, until every
+    # point is outside the margin again; from then on the normal rule. A path that starts outside is unchanged.
+    escaping: dict[int, np.ndarray] = {}
+    first = True
     for (q0, _, _), (q1, _, t) in zip(seq[:-1], seq[1:]):
         q0, q1 = np.asarray(q0, float), np.asarray(q1, float)
         n = max(2, int(math.ceil(np.max(np.abs(q1 - q0)) / STEP)) + 1)
@@ -155,12 +161,32 @@ def check(op, nodes, tag, opening=0.095, active=None, hand=True):
                 clear = np.maximum(d - mg, P[:, 2] - (tw["top"] + mg))
                 if exempt or not hand_on:
                     clear = np.where(hand, np.inf, clear)
+                k = id(tw)
+                if first and float(np.min(clear)) < 0:
+                    bare = np.maximum(d, P[:, 2] - tw["top"])
+                    if exempt or not hand_on:
+                        bare = np.where(hand, np.inf, bare)
+                    if float(np.min(bare)) >= 0:  # inside the margin only: an escape may start here
+                        escaping[k] = clear.copy()
+                if k in escaping:
+                    prev = escaping[k]
+                    bad = (clear < 0) & (clear < prev - ESCAPE_SLACK)
+                    if np.any(bad):
+                        j = int(np.argmax(bad))
+                        raise SystemExit(f"keep-out refused {tag}/{t}: escaping, {names[j]} moves {(prev[j] - clear[j]) * 1000:.1f} mm "
+                                         f"deeper into the margin of the tower at ({tw['x'] * 100:.1f}, {tw['y'] * 100:.1f}) cm")
+                    if float(np.min(clear)) >= 0:
+                        del escaping[k]  # out of the margin: the normal rule from here on
+                    else:
+                        escaping[k] = clear.copy()
+                        continue
                 i = int(np.argmin(clear))
                 if worst is None or clear[i] < worst:
                     worst = clear[i]
                 if clear[i] < 0:
                     raise SystemExit(f"keep-out refused {tag}/{t}: {names[i]} {-clear[i] * 1000:.0f} mm inside the tower cylinder at "
                                      f"({tw['x'] * 100:.1f}, {tw['y'] * 100:.1f}) cm, r {tw['r'] * 1000:.0f} mm, top {tw['top'] * 1000:.0f} mm")
+            first = False
     return None if worst is None else round(float(worst) * 1000, 1)
 
 
