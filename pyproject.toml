@@ -68,7 +68,8 @@ packages = ["src/dream_hackathon"]
 [tool.ruff]
 line-length = 119
 target-version = "py312"
-extend-exclude = ["vendor/leonard_sequences"]
+# Preserve the imported hillclimb branch's independent source style.
+extend-exclude = ["vendor/leonard_sequences", "hillclimb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]

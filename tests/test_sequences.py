@@ -2,7 +2,9 @@
 
 import copy
 import json
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
@@ -163,6 +165,15 @@ def test_sequence_selection_and_http_save_run_stop():
         assert controller.combined_input == "sequence"
         controller.select_input("right", "dream")
         assert controller.combined_input is None and controller.inputs["right"] == "dream"
+        controller.sequences.update("right", {"phases": []})
+        assert request(base, "/api/match/start", {})[0] == 200
+        wait_for(lambda: controller.sequences.runs["left"].snapshot()["busy"])
+        started = json.loads(request(base, "/api/state")[1])
+        assert started["match_started_at"] and started["match_stopped_at"] is None
+        assert request(base, "/api/match/stop", {})[0] == 200
+        wait_for(lambda: not controller.sequences.runs["left"].snapshot()["busy"])
+        stopped = json.loads(request(base, "/api/state")[1])
+        assert stopped["match_stopped_at"] >= started["match_started_at"]
     finally:
         page.close()
 
@@ -282,3 +293,158 @@ def test_unwired_monitors_record_unwired_and_continue():
         assert not any(caller.calls for caller in callers.values())
     finally:
         sequences.close()
+
+
+def test_http_mode_posts_start_and_stop_without_dream_calls():
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            received.append(json.loads(self.rfile.read(length)))
+            self.send_response(200)
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    sequences, callers, _, _ = manager()
+    url = f"http://127.0.0.1:{server.server_port}/start"
+    sequences.update("left", {"mode": "http", "httpUrl": url, "phases": []})
+    sequences.update("right", {"phases": []})
+    try:
+        started = sequences.start_match()
+        assert started == ["left"]
+        wait_for(lambda: received and received[0]["event"] == "start")
+        assert sequences.runs["left"].snapshot()["busy"]
+        sequences.stop_sides(["left"])
+        wait_for(lambda: not sequences.runs["left"].snapshot()["busy"])
+        assert [item["event"] for item in received] == ["start", "stop"]
+        assert received[0]["selection"] == "left"
+        assert not any(caller.calls for caller in callers.values())
+    finally:
+        sequences.close()
+        server.shutdown()
+
+
+def test_script_mode_calls_start_and_stop(tmp_path, monkeypatch):
+    from dream_hackathon import sequences as sequences_mod
+
+    monkeypatch.setattr(sequences_mod, "PROJECT_ROOT", tmp_path)
+    log = tmp_path / "log.txt"
+    (tmp_path / "left_go.py").write_text(
+        "from pathlib import Path\n"
+        f"LOG = Path({str(log)!r})\n"
+        "def start(context):\n"
+        "    LOG.write_text('start:' + context['selection'])\n"
+        "def stop(context):\n"
+        "    LOG.write_text(LOG.read_text() + '|stop:' + context['event'])\n"
+    )
+    sequences, callers, _, _ = manager()
+    sequences.update("left", {"mode": "script", "scriptRef": "left_go.py:start", "phases": []})
+    sequences.update("right", {"phases": []})
+    try:
+        started = sequences.start_match()
+        assert started == ["left"]
+        wait_for(lambda: log.exists() and log.read_text().startswith("start:left"))
+        assert sequences.runs["left"].snapshot()["busy"]
+        sequences.stop_sides(["left"])
+        wait_for(lambda: not sequences.runs["left"].snapshot()["busy"])
+        assert log.read_text() == "start:left|stop:stop"
+        assert not any(caller.calls for caller in callers.values())
+    finally:
+        sequences.close()
+
+
+def test_http_mode_saves_empty_url_but_refuses_run_without_one():
+    saved = validate_definition({"mode": "http", "httpUrl": "", "phases": []})
+    assert saved["mode"] == "http" and saved["httpUrl"] == ""
+    with pytest.raises(ValueError, match="http or https"):
+        validate_definition({"mode": "http", "httpUrl": "", "phases": []}, for_run=True)
+    with pytest.raises(ValueError, match="http or https"):
+        validate_definition({"mode": "http", "httpUrl": "not-a-url", "phases": []})
+    script = validate_definition({"mode": "script", "scriptRef": "", "phases": []})
+    assert script["mode"] == "script" and script["scriptRef"] == ""
+    with pytest.raises(ValueError, match="project file"):
+        validate_definition({"mode": "script", "scriptRef": "", "phases": []}, for_run=True)
+    with pytest.raises(ValueError, match="this project"):
+        validate_definition({"mode": "script", "scriptRef": "../secret.py", "phases": []})
+    sequences, _, _, _ = manager()
+    try:
+        sequences.update("left", {"phases": []})
+        sequences.update("right", {"phases": []})
+        with pytest.raises(ValueError, match="HTTP start link"):
+            sequences.start_match()
+    finally:
+        sequences.close()
+
+
+def test_left_http_input_points_at_hillclimb_and_keeps_a_custom_url():
+    from dream_hackathon.sequences import hillclimb_match
+
+    base_url = hillclimb_match().base_url
+
+    nodes = {
+        side: SimpleNamespace(
+            snapshot=lambda: {"arm_open": False},
+            cancel_home=lambda: None,
+            control=SimpleNamespace(post=lambda path, body: None),
+        )
+        for side in ("left", "right")
+    }
+    callers = {side: Caller(side) for side in ("left", "right", "both")}
+    leader = SimpleNamespace(side=None, state=lambda: Controls(1, "none").snapshot())
+    controller = UnifiedController(nodes, leader, callers)
+    try:
+        assert controller.sequences.snapshot()["left"]["definition"]["httpUrl"] == base_url()
+        controller.sequences.update("left", {"mode": "local", "httpUrl": "", "phases": []})
+        controller.select_input("left", "http")
+        left = controller.sequences.snapshot()["left"]["definition"]
+        assert left["mode"] == "http" and left["httpUrl"] == base_url()
+        controller.select_input("right", "http")
+        assert controller.sequences.snapshot()["right"]["definition"]["httpUrl"] == ""
+        controller.sequences.update("right", {"mode": "local", "scriptRef": "", "phases": []})
+        controller.select_input("right", "script")
+        right = controller.sequences.snapshot()["right"]["definition"]
+        assert right["mode"] == "script" and right["scriptRef"] == "scripts/start_right_arm_simple.py:start"
+        controller.sequences.update("left", {"mode": "local", "httpUrl": "http://127.0.0.1:8090/start", "phases": []})
+        controller.select_input("left", "sequence")
+        controller.select_input("left", "http")
+        assert controller.sequences.snapshot()["left"]["definition"]["httpUrl"] == "http://127.0.0.1:8090/start"
+    finally:
+        controller.sequences.close()
+
+
+def test_http_input_sets_sequence_mode_and_match_stop_does_not_command_arms():
+    posts = []
+
+    def make_node():
+        return SimpleNamespace(
+            snapshot=lambda: {"arm_open": True, "grip_torque_nm": 1},
+            cancel_home=lambda: None,
+            control=SimpleNamespace(post=lambda path, body: posts.append(path)),
+        )
+
+    nodes = {"left": make_node(), "right": make_node()}
+    callers = {side: Caller(side) for side in ("left", "right", "both")}
+    leader = SimpleNamespace(side=None, state=lambda: Controls(1, "none").snapshot())
+    controller = UnifiedController(nodes, leader, callers)
+    try:
+        controller.select_input("left", "http")
+        assert controller.inputs["left"] == "http"
+        assert controller.sequences.snapshot()["left"]["definition"]["mode"] == "http"
+        controller.select_input("left", "sequence")
+        assert controller.sequences.snapshot()["left"]["definition"]["mode"] == "local"
+        controller.sequences.update("left", definition(wait=1))
+        controller.sequences.update("right", {"phases": []})
+        controller.match_start()
+        wait_for(lambda: controller.sequences.runs["left"].snapshot()["busy"])
+        posts.clear()
+        controller.match_stop()
+        wait_for(lambda: not controller.sequences.runs["left"].snapshot()["busy"])
+        assert posts == []
+        assert controller.match_stopped_at is not None
+    finally:
+        controller.sequences.close()

@@ -137,29 +137,86 @@ async function action(path, body = {}) {
   } catch (error) { $('message').textContent = error.message; return null; }
 }
 
+function panelFor(side, source) {
+  if (source === 'so101') return $('so101-panel');
+  if (source === 'star') return $('star-panel');
+  if (source === 'dream' || source === 'sequence' || source === 'auto') return $(source === 'dream' ? 'api-' + side + '-panel' : source + '-' + side + '-panel');
+  if (source === 'http' || source === 'script') return $(source + '-' + side + '-panel');
+  return null;
+}
+
 function renderSelections() {
   const inputs = station.inputs || {}, both = station.combined_input;
+  const holder = $('panel-holder');
+  const shown = new Set();
+  for (const source of ['dream', 'sequence', 'auto']) {
+    $('both-input-' + source).setAttribute('aria-pressed', String(both === source));
+  }
+  const combinedPanel = both && panelFor('both', both);
+  if (combinedPanel) {
+    $('both-detail').append(combinedPanel);
+    combinedPanel.hidden = false;
+    shown.add(combinedPanel);
+  }
   for (const side of ['left', 'right']) {
-    for (const source of ['dream', 'so101', 'star', 'sequence', 'auto']) {
-      $(side + '-input-' + source).setAttribute('aria-pressed', String(!both && inputs[side] === source));
+    const source = !both && inputs[side];
+    for (const name of ['dream', 'so101', 'star', 'sequence', 'http', 'script', 'auto']) {
+      $(side + '-input-' + name).setAttribute('aria-pressed', String(source === name));
     }
+    const panel = panelFor(side, source);
+    const detail = $(side + '-detail');
+    if (panel && !shown.has(panel)) {
+      detail.append(panel);
+      panel.hidden = false;
+      detail.hidden = false;
+      shown.add(panel);
+    } else detail.hidden = true;
   }
-  $('both-input-dream').setAttribute('aria-pressed', String(both === 'dream'));
-  $('both-input-sequence').setAttribute('aria-pressed', String(both === 'sequence'));
-  $('both-input-auto').setAttribute('aria-pressed', String(both === 'auto'));
-  $('so101-panel').hidden = !Object.values(inputs).includes('so101');
-  $('star-panel').hidden = !Object.values(inputs).includes('star');
-  for (const selection of selections) {
-    $('api-' + selection + '-panel').hidden = selection === 'both' ? both !== 'dream' :
-      !!both || inputs[selection] !== 'dream';
-    $('sequence-' + selection + '-panel').hidden = selection === 'both' ? both !== 'sequence' :
-      !!both || inputs[selection] !== 'sequence';
-    $('auto-' + selection + '-panel').hidden = selection === 'both' ? both !== 'auto' :
-      !!both || inputs[selection] !== 'auto';
+  for (const panel of document.querySelectorAll('.arm-expand')) {
+    if (shown.has(panel)) continue;
+    panel.hidden = true;
+    holder.append(panel);
   }
-  const count = document.querySelectorAll('#input-panels > article:not([hidden])').length;
-  $('input-panels').hidden = count === 0;
-  $('input-panels').classList.toggle('single', count === 1);
+}
+
+function formatMatchTime(seconds) {
+  seconds = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds - minutes * 60;
+  return String(minutes).padStart(2, '0') + ':' + rest.toFixed(1).padStart(4, '0');
+}
+
+function matchSeconds(state) {
+  if (!state.match_started_at) return 0;
+  const end = state.match_stopped_at || (Date.now() / 1000);
+  return end - state.match_started_at;
+}
+
+let matchClock = null;
+function renderMatch(state) {
+  const running = ['left', 'right', 'both'].some(side => (state.sequences || {})[side]?.busy);
+  $('match-start').dataset.on = running;
+  $('match-start').textContent = running ? 'STOP' : 'START';
+  $('match-timer').textContent = formatMatchTime(matchSeconds(state));
+  if (running && !matchClock) {
+    matchClock = setInterval(() => {$('match-timer').textContent = formatMatchTime(matchSeconds(station));}, 100);
+  }
+  if (!running && matchClock) {
+    clearInterval(matchClock); matchClock = null;
+    $('match-timer').textContent = formatMatchTime(matchSeconds(state));
+  }
+}
+
+function renderSideMode(state, kind, field) {
+  for (const side of ['left', 'right']) {
+    const sequence = (state.sequences || {})[side] || {};
+    const input = $(kind + '-' + side + '-' + field);
+    if (document.activeElement !== input) input.value = (sequence.definition || {})[field] || '';
+    input.disabled = !!sequence.busy;
+    $(kind + '-' + side + '-status').textContent = [sequence.state || 'idle', sequence.phase_title, sequence.step_label]
+      .filter(Boolean).join(' · ');
+    $(kind + '-' + side + '-error').textContent = sequence.error || '';
+  }
 }
 
 function render(state) {
@@ -212,6 +269,9 @@ function render(state) {
      star.replay_phase === 'complete' ? 'Replay complete' :
      'Replay approaches the start pose, then follows the recorded timing.');
   renderSelections();
+  renderMatch(state);
+  renderSideMode(state, 'http', 'httpUrl');
+  renderSideMode(state, 'script', 'scriptRef');
   if (window.renderSequenceState) window.renderSequenceState(state.sequences, state.monitor_scripts);
   if (window.renderFlowState) window.renderFlowState(state.flows);
 }
@@ -244,15 +304,58 @@ for (const side of ['left', 'right']) {
     await action('/api/arms/' + side + '/grip-torque', {torque_nm: Number($(side + '-grip-torque').value)});
     gripDragging[side] = false; render(station);
   };
-  for (const source of ['dream', 'so101', 'star', 'sequence', 'auto']) {
+  for (const source of ['dream', 'so101', 'star', 'sequence', 'http', 'script', 'auto']) {
     $(side + '-input-' + source).onclick = () => action('/api/arms/' + side + '/input', {
       source: !station.combined_input && station.inputs[side] === source ? null : source
     });
   }
 }
-$('both-input-dream').onclick = () => action('/api/both/input', {source: station.combined_input === 'dream' ? null : 'dream'});
-$('both-input-sequence').onclick = () => action('/api/both/input', {source: station.combined_input === 'sequence' ? null : 'sequence'});
-$('both-input-auto').onclick = () => action('/api/both/input', {source: station.combined_input === 'auto' ? null : 'auto'});
+for (const source of ['dream', 'sequence', 'auto']) {
+  $('both-input-' + source).onclick = () => action('/api/both/input', {
+    source: station.combined_input === source ? null : source
+  });
+}
+function wireModePanel(kind, mode, field, title, savingText) {
+  for (const side of ['left', 'right']) {
+    const panel = $(kind + '-' + side + '-panel');
+    panel.append($(kind + '-panel-template').content.cloneNode(true));
+    for (const node of panel.querySelectorAll('[data-' + kind + '-field]')) {
+      node.id = kind + '-' + side + '-' + node.dataset[kind + 'Field'];
+    }
+    $(kind + '-' + side + '-title').textContent = title + ' · ' + (side === 'left' ? 'Left arm' : 'Right arm');
+    if (kind === 'http' && side === 'left') {
+      $(kind + '-' + side + '-' + field).placeholder = 'http://127.0.0.1:8770';
+    }
+    if (kind === 'script' && side === 'right') {
+      $(kind + '-' + side + '-' + field).placeholder = 'scripts/run_right_arm.py';
+    }
+    $(kind + '-' + side + '-' + field).oninput = async () => {
+      const current = ((station.sequences || {})[side] || {}).definition || {phases: []};
+      $(kind + '-' + side + '-saved').textContent = savingText;
+      try {
+        const response = await fetch('/api/sequences/' + side + '/save', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            definition: {...current, mode, [field]: $(kind + '-' + side + '-' + field).value, phases: current.phases || []}
+          })
+        });
+        const result = await response.json();
+        if (!response.ok) throw Error(result.error);
+        station.sequences = result.sequences;
+        $(kind + '-' + side + '-saved').textContent = 'Saved · shared with everyone connected';
+        if (window.renderSequenceState) window.renderSequenceState(result.sequences);
+      } catch (error) {
+        $(kind + '-' + side + '-saved').textContent = error.message;
+      }
+    };
+  }
+}
+wireModePanel('http', 'http', 'httpUrl', 'HTTP start', 'Saving shared start link…');
+wireModePanel('script', 'script', 'scriptRef', 'Script', 'Saving shared script…');
+$('match-start').onclick = () => {
+  const running = ['left', 'right', 'both'].some(side => (station.sequences || {})[side]?.busy);
+  action(running ? '/api/match/stop' : '/api/match/start');
+};
 $('track').onclick = () => action('/api/control', {tracking: true});
 $('untrack').onclick = () => action('/api/control', {tracking: false});
 $('record').onclick = () => action('/api/control', {recording_requested: !station.recording_requested});
@@ -281,7 +384,13 @@ events.onmessage = message => {
   if (event.type === 'selection') {
     station.inputs = event.inputs; station.combined_input = event.combined_input; renderSelections();
   }
-  if (event.type === 'sequences' && window.renderSequenceState) window.renderSequenceState(event.sequences);
+  if (event.type === 'sequences') {
+    station.sequences = event.sequences;
+    if (window.renderSequenceState) window.renderSequenceState(event.sequences);
+    renderSideMode(station, 'http', 'httpUrl');
+    renderSideMode(station, 'script', 'scriptRef');
+    renderMatch(station);
+  }
   if (event.type === 'flows' && window.renderFlowState) window.renderFlowState(event.flows);
 };
 async function poll() {

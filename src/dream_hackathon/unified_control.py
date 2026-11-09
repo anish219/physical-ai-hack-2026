@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dream_hackathon.armserver import ArmBinding, CameraHub
 from dream_hackathon.orchestration import FlowManager
 from dream_hackathon.remote_arm import call
-from dream_hackathon.sequences import SequenceManager
+from dream_hackathon.sequences import RIGHT_ARM_SCRIPT, SequenceManager, hillclimb_match
 from dream_hackathon.so101_dashboard import Controls
 
 
@@ -238,6 +238,8 @@ class UnifiedController:
         }
         self.sequences = SequenceManager(self.callers, nodes, self.publish, sequence_path)
         self.flows = FlowManager(self.callers, nodes, self.publish, flow_path)
+        self.match_started_at = None
+        self.match_stopped_at = None
 
     def shared_state(self):
         with self.shared_lock:
@@ -283,6 +285,8 @@ class UnifiedController:
         state["sequences"] = self.sequences.snapshot()
         state["flows"] = self.flows.snapshot()
         state["monitor_scripts"] = self.sequences.monitors.available_scripts()
+        state["match_started_at"] = self.match_started_at
+        state["match_stopped_at"] = self.match_stopped_at
         if self.leader.side in state["arms"]:
             state["arm_open"] = state["arms"][self.leader.side]["arm_open"]
             state["grip_torque_nm"] = state["arms"][self.leader.side]["grip_torque_nm"]
@@ -307,8 +311,19 @@ class UnifiedController:
                 self.nodes[side].control.post("/stop", {})
 
     def select_input(self, side, source):
-        if side not in self.nodes or source not in (None, "so101", "star", "dream", "sequence", "auto"):
-            raise ValueError("Choose SO-101, Star arm, Dream API, Sequences, Full Auto, or no input")
+        if side not in self.nodes or source not in (
+            None,
+            "so101",
+            "star",
+            "dream",
+            "sequence",
+            "http",
+            "script",
+            "auto",
+        ):
+            raise ValueError(
+                "Choose SO-101, Star arm, Dream API, Sequences, HTTP start, Script, Full Auto, or no input"
+            )
         with self.input_lock:
             if self.combined_input is not None:
                 self.pause(list(self.nodes))
@@ -331,6 +346,19 @@ class UnifiedController:
                     self.inputs[previous] = None
                 leader.select(side)
             self.inputs[side] = source
+            if source in ("http", "sequence", "script"):
+                definition = copy.deepcopy(self.sequences.snapshot()[side]["definition"])
+                mode = {"http": "http", "script": "script", "sequence": "local"}[source]
+                changed = definition.get("mode") != mode
+                definition["mode"] = mode
+                if source == "http" and side == "left" and not (definition.get("httpUrl") or "").strip():
+                    definition["httpUrl"] = hillclimb_match().base_url()
+                    changed = True
+                if source == "script" and side == "right" and not (definition.get("scriptRef") or "").strip():
+                    definition["scriptRef"] = RIGHT_ARM_SCRIPT
+                    changed = True
+                if changed:
+                    self.sequences.update(side, definition)
             self.publish_selection()
             return self.state()
 
@@ -431,6 +459,24 @@ class UnifiedController:
             else:
                 raise ValueError("Unknown sequence action")
 
+    def match_start(self):
+        with self.input_lock:
+            for selection in ("left", "right"):
+                if self.sequences.runs[selection].snapshot()["busy"]:
+                    raise ValueError("A sequence is already running")
+            self.pause(("left", "right"))
+            self.sequences.start_match()
+            self.match_started_at = time.time()
+            self.match_stopped_at = None
+            return self.state()
+
+    def match_stop(self):
+        with self.input_lock:
+            self.sequences.stop_sides(("left", "right"))
+            if self.match_started_at is not None and self.match_stopped_at is None:
+                self.match_stopped_at = time.time()
+            return self.state()
+
     def flow_action(self, selection, action, body):
         if selection not in self.flows.runs:
             raise ValueError("Choose left, right, or both for the flow")
@@ -497,23 +543,28 @@ class UnifiedPage:
                 self.wfile.write(body)
 
             def do_GET(self):  # noqa: N802
-                if self.path == "/":
-                    self.reply(200, PAGE.encode(), "text/html; charset=utf-8")
-                elif self.path in ("/controller.js", "/sequences.js", "/orchestration.js", "/orchestration.css"):
+                path = self.path.split("?", 1)[0]
+                if path == "/":
+                    self.reply(
+                        200,
+                        pathlib.Path(__file__).with_name("unified_control.html").read_bytes(),
+                        "text/html; charset=utf-8",
+                    )
+                elif path in ("/controller.js", "/sequences.js", "/orchestration.js", "/orchestration.css"):
                     self.reply(
                         200,
                         pathlib.Path(__file__)
-                        .with_name("unified_control.js" if self.path == "/controller.js" else self.path.lstrip("/"))
+                        .with_name("unified_control.js" if path == "/controller.js" else path.lstrip("/"))
                         .read_bytes(),
-                        "text/css; charset=utf-8" if self.path.endswith(".css") else "text/javascript; charset=utf-8",
+                        "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8",
                     )
-                elif self.path == "/api/state":
+                elif path == "/api/state":
                     self.reply(200, json.dumps(controller.state()).encode())
-                elif self.path == "/api/flow-strategy":
+                elif path == "/api/flow-strategy":
                     from dream_hackathon.demo_strategy import competition_graph
 
                     self.reply(200, json.dumps(competition_graph()).encode())
-                elif self.path == "/api/models":
+                elif path == "/api/models":
                     try:
                         self.reply(200, json.dumps(controller.model_loader()).encode())
                     except Exception as error:
@@ -521,7 +572,7 @@ class UnifiedPage:
                         if not isinstance(error, subprocess.CalledProcessError):
                             message += f": {error}"
                         self.reply(502, json.dumps({"error": message}).encode())
-                elif self.path == "/api/events":
+                elif path == "/api/events":
                     listener = queue.Queue()
                     with controller.shared_lock:
                         controller.listeners.add(listener)
@@ -550,15 +601,15 @@ class UnifiedPage:
                     finally:
                         with controller.shared_lock:
                             controller.listeners.discard(listener)
-                elif self.path.startswith("/api/camera/"):
-                    role = self.path.rsplit("/", 1)[-1].split(".")[0]
+                elif path.startswith("/api/camera/"):
+                    role = path.rsplit("/", 1)[-1].split(".")[0]
                     side = "left" if role in ("left", "overhead") else "right"
                     if role == "overhead" and not controller.nodes[side].snapshot()["arm_open"]:
                         side = "right"
-                    path = "/overhead.jpg" if role == "overhead" else "/wrist.jpg"
+                    frame = "/overhead.jpg" if role == "overhead" else "/wrist.jpg"
                     try:
                         with urllib.request.urlopen(
-                            f"http://127.0.0.1:{controller.nodes[side].port}" + path, timeout=5
+                            f"http://127.0.0.1:{controller.nodes[side].port}" + frame, timeout=5
                         ) as response:
                             self.reply(200, response.read(), "image/jpeg")
                     except OSError:
@@ -600,6 +651,10 @@ class UnifiedPage:
                             self.reply(200, json.dumps(event).encode())
                             return
                         controller.dream_action(parts[2], parts[3], body)
+                    elif self.path == "/api/match/start":
+                        controller.match_start()
+                    elif self.path == "/api/match/stop":
+                        controller.match_stop()
                     elif self.path.startswith("/api/sequences/"):
                         parts = self.path.strip("/").split("/")
                         if len(parts) != 4:
